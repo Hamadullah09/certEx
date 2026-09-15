@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local data
+/data/
+/infra/data/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated test artifacts
+/api/tests/fixtures/generated/
+/api/.artifacts/

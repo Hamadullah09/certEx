@@ -1,0 +1,136 @@
+"use client";
+
+import * as React from "react";
+import { AlertCircle, Loader2 } from "lucide-react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useLogin } from "@/hooks/use-session";
+import { ApiError } from "@/lib/api";
+import { loginRequestSchema } from "@/lib/schemas/auth";
+
+const appName = process.env.NEXT_PUBLIC_APP_NAME ?? "CertExtract";
+
+export default function LoginPage() {
+  const login = useLogin();
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+
+    const parsed = loginRequestSchema.safeParse({
+      email: String(data.get("email") ?? ""),
+      password: String(data.get("password") ?? ""),
+    });
+
+    if (!parsed.success) {
+      const errors: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const field = issue.path[0];
+        if (typeof field === "string" && !errors[field]) errors[field] = issue.message;
+      }
+      setFieldErrors(errors);
+      return;
+    }
+
+    setFieldErrors({});
+    login.mutate(parsed.data);
+  }
+
+  const serverError = login.error;
+  const isRateLimited = serverError instanceof ApiError && serverError.status === 429;
+
+  return (
+    <main id="main" className="flex min-h-dvh items-center justify-center px-4 py-12">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>Sign in to {appName}</CardTitle>
+          <CardDescription>
+            Use the account your workspace administrator issued you.
+          </CardDescription>
+        </CardHeader>
+
+        <form onSubmit={handleSubmit} noValidate>
+          <CardContent className="space-y-4">
+            {serverError ? (
+              <Alert variant={isRateLimited ? "warning" : "destructive"}>
+                <AlertCircle aria-hidden="true" />
+                <AlertTitle>
+                  {serverError instanceof ApiError ? serverError.message : "Sign-in failed"}
+                </AlertTitle>
+                <AlertDescription>
+                  {serverError instanceof ApiError
+                    ? (serverError.remediation ?? "Check your details and try again.")
+                    : "Could not reach the server. Check your connection and try again."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="username"
+                autoFocus
+                required
+                aria-invalid={Boolean(fieldErrors.email)}
+                aria-describedby={fieldErrors.email ? "email-error" : undefined}
+                disabled={login.isPending}
+              />
+              {fieldErrors.email ? (
+                <p id="email-error" className="text-sm text-destructive">
+                  {fieldErrors.email}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                aria-invalid={Boolean(fieldErrors.password)}
+                aria-describedby={fieldErrors.password ? "password-error" : undefined}
+                disabled={login.isPending}
+              />
+              {fieldErrors.password ? (
+                <p id="password-error" className="text-sm text-destructive">
+                  {fieldErrors.password}
+                </p>
+              ) : null}
+            </div>
+          </CardContent>
+
+          <CardFooter>
+            <Button type="submit" className="w-full" disabled={login.isPending}>
+              {login.isPending ? (
+                <>
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                  Signing in
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+          </CardFooter>
+        </form>
+      </Card>
+    </main>
+  );
+}

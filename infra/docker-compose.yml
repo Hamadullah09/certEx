@@ -1,0 +1,307 @@
+# =============================================================================
+# CertExtract - full local stack.
+#
+#   docker compose up
+#
+# from the repository root (the root compose file includes this one). Brings up
+# Postgres, Redis, MinIO, the API, two classes of Celery worker, the scheduler and
+# the Next.js frontend, applies migrations and seeds demo data.
+# =============================================================================
+
+name: certex
+
+x-python-build: &python-build
+  context: ..
+  dockerfile: infra/docker/Dockerfile.python
+  args:
+    # The local stack ships the test tooling so `docker compose run --rm tests`
+    # exercises the same image the services run. Set false for a release build.
+    INSTALL_DEV: ${INSTALL_DEV:-true}
+
+x-python-env: &python-env
+  APP_ENV: ${APP_ENV:-local}
+  APP_NAME: ${APP_NAME:-CertExtract}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-console}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-3000}}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-insecure-change-me-0000000000000000000000000000000000}
+  ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+  REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-1209600}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-certex}:${POSTGRES_PASSWORD:-certex}@postgres:5432/${POSTGRES_DB:-certex}
+  DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-certex}:${POSTGRES_PASSWORD:-certex}@postgres:5432/${POSTGRES_DB:-certex}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-4}
+  CELERY_OCR_CONCURRENCY: ${CELERY_OCR_CONCURRENCY:-2}
+  CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-1800}
+  CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-1500}
+  CELERY_MAX_TASKS_PER_CHILD: ${CELERY_MAX_TASKS_PER_CHILD:-50}
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  S3_BUCKET: ${S3_BUCKET:-certex-documents}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_USE_PATH_STYLE: "true"
+  S3_SSE: ${S3_SSE:-AES256}
+  MAX_FILE_BYTES: ${MAX_FILE_BYTES:-524288000}
+  MAX_BATCH_FILES: ${MAX_BATCH_FILES:-2000}
+  MAX_BATCH_BYTES: ${MAX_BATCH_BYTES:-5368709120}
+  OCR_LANGUAGES: ${OCR_LANGUAGES:-eng+urd}
+  OCR_DPI: ${OCR_DPI:-300}
+  OCR_HIGH_DPI: ${OCR_HIGH_DPI:-600}
+  OCR_PADDLE_ENABLED: ${OCR_PADDLE_ENABLED:-true}
+  LLM_ENABLED: ${LLM_ENABLED:-true}
+  LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+  LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_ALLOW_VISION: ${LLM_ALLOW_VISION:-false}
+  CONFIDENCE_AUTO_APPROVE: ${CONFIDENCE_AUTO_APPROVE:-0.90}
+  CONFIDENCE_REVIEW_FLOOR: ${CONFIDENCE_REVIEW_FLOOR:-0.60}
+  RETENTION_DAYS: ${RETENTION_DAYS:-90}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  CLAMAV_ENABLED: ${CLAMAV_ENABLED:-false}
+  SEED_ENABLED: ${SEED_ENABLED:-true}
+  SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@example.com}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin12345}
+  SEED_OPERATOR_EMAIL: ${SEED_OPERATOR_EMAIL:-operator@example.com}
+  SEED_OPERATOR_PASSWORD: ${SEED_OPERATOR_PASSWORD:-operator12345}
+  SEED_VIEWER_EMAIL: ${SEED_VIEWER_EMAIL:-viewer@example.com}
+  SEED_VIEWER_PASSWORD: ${SEED_VIEWER_PASSWORD:-viewer12345}
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------- data stores
+  postgres:
+    image: postgres:16-alpine
+    <<: *restart
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-certex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-certex}
+      POSTGRES_DB: ${POSTGRES_DB:-certex}
+      # Deterministic collation so ORDER BY on names is stable across hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=16MB
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-certex} -d ${POSTGRES_DB:-certex}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    # Pulled from MinIO's own registry: the docker.io/minio/minio mirror now
+    # refuses anonymous pulls. Same image, same digest publisher.
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+    <<: *restart
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # MinIO refuses SSE-S3 unless a KMS is configured. This built-in key makes
+      # encryption-at-rest real in local dev instead of silently disabled, so the
+      # dev stack exercises the same write path as production. Replace it - and
+      # use KES or AWS KMS - for any deployment holding real records.
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:-certex-dev-key:Y2VydGV4LWRldi1vbmx5LWttcy1rZXktMzJieXRlcyE=}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ------------------------------------------------------------ schema + seed
+  migrate:
+    image: certex-api:latest
+    build:
+      <<: *python-build
+      target: api
+    environment: *python-env
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-migrate.sh"]
+    volumes:
+      - ../api:/app/api
+      - ../infra/alembic:/app/infra/alembic
+      - ../infra/alembic.ini:/app/infra/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------- application
+  api:
+    # Shared with the migrate service: same target, same image, built once.
+    image: certex-api:latest
+    build:
+      <<: *python-build
+      target: api
+    <<: *restart
+    environment:
+      <<: *python-env
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ../api:/app/api
+      - ../infra/alembic:/app/infra/alembic
+      - ../infra/alembic.ini:/app/infra/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    # Shared by worker, worker-ocr and beat - they differ only by WORKER_ROLE.
+    image: certex-worker:latest
+    build:
+      <<: *python-build
+      target: worker
+    <<: *restart
+    environment:
+      <<: *python-env
+      WORKER_ROLE: default
+    volumes:
+      - ../api:/app/api
+      - ../infra/alembic:/app/infra/alembic
+      - ../infra/alembic.ini:/app/infra/alembic.ini
+      - ../worker:/app/worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+
+  worker-ocr:
+    image: certex-worker:latest
+    build:
+      <<: *python-build
+      target: worker
+    <<: *restart
+    environment:
+      <<: *python-env
+      WORKER_ROLE: ocr
+    volumes:
+      - ../api:/app/api
+      - ../infra/alembic:/app/infra/alembic
+      - ../infra/alembic.ini:/app/infra/alembic.ini
+      - ../worker:/app/worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: ${OCR_WORKER_REPLICAS:-1}
+
+  beat:
+    image: certex-worker:latest
+    build:
+      <<: *python-build
+      target: worker
+    <<: *restart
+    environment:
+      <<: *python-env
+      WORKER_ROLE: beat
+    volumes:
+      - ../api:/app/api
+      - ../infra/alembic:/app/infra/alembic
+      - ../infra/alembic.ini:/app/infra/alembic.ini
+      - ../worker:/app/worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: certex-web:latest
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.web
+      target: ${WEB_TARGET:-development}
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT:-8000}}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-CertExtract}
+    <<: *restart
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT:-8000}}
+      API_INTERNAL_BASE_URL: http://api:8000
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-CertExtract}
+      NEXT_PUBLIC_LLM_PROVIDER_LABEL: ${NEXT_PUBLIC_LLM_PROVIDER_LABEL:-Anthropic Claude (external)}
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      # Source is bind-mounted for hot reload. node_modules and .next stay as
+      # container-owned volumes so the host's platform-specific installs (and
+      # Windows path semantics) never shadow what was built in the image.
+      - ../web:/app
+      - web_node_modules:/app/node_modules
+      - web_next_cache:/app/.next
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  web_node_modules:
+  web_next_cache:

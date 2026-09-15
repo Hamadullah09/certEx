@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "certex-worker"
+version = "0.1.0"
+description = "CertExtract Celery workers - pipeline stage task wrappers"
+requires-python = ">=3.11,<3.13"
+
+# The pipeline logic, ORM models and configuration all live in the `certex`
+# package under /api, which both services install. The worker package holds only
+# the Celery task wrappers, so it declares no dependencies of its own.
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["worker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]

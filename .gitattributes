@@ -1,0 +1,54 @@
+# Normalise line endings.
+#
+# Without this, a clone on Windows checks out the container entrypoints with
+# CRLF, and the Linux image then fails at startup with
+# `/usr/bin/env: 'bash\r': No such file or directory`. Anything a container or a
+# POSIX tool executes is pinned to LF regardless of platform.
+
+* text=auto eol=lf
+
+# --- must stay LF: executed inside Linux containers -------------------------
+*.sh            text eol=lf
+Dockerfile*     text eol=lf
+*.dockerfile    text eol=lf
+entrypoint-*    text eol=lf
+healthcheck-*   text eol=lf
+
+# --- source and config ------------------------------------------------------
+*.py            text eol=lf diff=python
+*.pyi           text eol=lf diff=python
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.mjs           text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+*.ini           text eol=lf
+*.mako          text eol=lf
+*.sql           text eol=lf
+.env.example    text eol=lf
+.gitignore      text eol=lf
+.dockerignore   text eol=lf
+
+# --- binary: never touch ----------------------------------------------------
+*.pdf           binary
+*.docx          binary
+*.doc           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.tif           binary
+*.tiff          binary
+*.zip           binary
+*.ttf           binary
+*.woff          binary
+*.woff2         binary
+*.ico           binary
+
+# --- keep generated noise out of diffs and language stats -------------------
+package-lock.json   linguist-generated=true -diff
+infra/alembic/versions/*.py  linguist-generated=false

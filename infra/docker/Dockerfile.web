@@ -1,0 +1,76 @@
+# =============================================================================
+# Next.js frontend.
+#
+#   --target development  next dev with hot reload, source bind-mounted
+#   --target production   standalone server bundle on a minimal runtime
+#
+# The production target uses Next's `output: "standalone"` build, which traces
+# only the modules actually imported. The runtime image therefore ships no
+# node_modules tree and no build toolchain.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+FROM node:22-alpine AS base
+# -----------------------------------------------------------------------------
+# libc6-compat: some transitive native modules expect glibc symbols on Alpine.
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# -----------------------------------------------------------------------------
+FROM base AS deps
+# -----------------------------------------------------------------------------
+# Lockfile only, so editing a component does not reinstall the dependency tree.
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+
+# -----------------------------------------------------------------------------
+FROM base AS development
+# -----------------------------------------------------------------------------
+COPY --from=deps /app/node_modules ./node_modules
+COPY web ./
+ENV NODE_ENV=development
+EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
+    CMD wget --spider -q http://127.0.0.1:3000/login || exit 1
+CMD ["npm", "run", "dev"]
+
+# -----------------------------------------------------------------------------
+FROM base AS builder
+# -----------------------------------------------------------------------------
+COPY --from=deps /app/node_modules ./node_modules
+COPY web ./
+
+# NEXT_PUBLIC_* values are inlined into the client bundle at build time, so they
+# must be present here rather than only at runtime.
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ARG NEXT_PUBLIC_APP_NAME=CertExtract
+ARG NEXT_PUBLIC_LLM_PROVIDER_LABEL="Anthropic Claude (external)"
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
+    NEXT_PUBLIC_APP_NAME=$NEXT_PUBLIC_APP_NAME \
+    NEXT_PUBLIC_LLM_PROVIDER_LABEL=$NEXT_PUBLIC_LLM_PROVIDER_LABEL \
+    NODE_ENV=production
+
+# next.config.ts keeps type and lint checking on, so this step fails the build on
+# a type error rather than shipping it.
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+FROM base AS production
+# -----------------------------------------------------------------------------
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
+
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+EXPOSE 3000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+    CMD wget --spider -q http://127.0.0.1:3000/login || exit 1
+
+CMD ["node", "server.js"]

@@ -1,0 +1,6 @@
+# Root entry point so `docker compose up` works from the repository root.
+# The canonical stack definition lives in infra/docker-compose.yml.
+name: certex
+
+include:
+  - path: infra/docker-compose.yml

@@ -1,0 +1,167 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Dark mode is driven by a `class` on <html> (next-themes), not by a media
+ * query, so an operator can override their OS preference.
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design tokens. Foreground/background pairs are chosen to clear WCAG AA (4.5:1
+ * for body text, 3:1 for large text and UI borders) in both themes.
+ *
+ * The confidence ramp is the one palette that carries meaning rather than
+ * decoration: it shades result cells by extraction confidence. It is never the
+ * only signal - every cell also exposes its confidence as text and as an
+ * aria-label - because colour alone fails for colour-blind reviewers.
+ */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.17 0.01 260);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.17 0.01 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.17 0.01 260);
+
+  --primary: oklch(0.45 0.16 260);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary: oklch(0.96 0.005 260);
+  --secondary-foreground: oklch(0.25 0.01 260);
+
+  --muted: oklch(0.96 0.005 260);
+  --muted-foreground: oklch(0.45 0.015 260);
+
+  --accent: oklch(0.95 0.015 260);
+  --accent-foreground: oklch(0.25 0.02 260);
+
+  --destructive: oklch(0.52 0.21 27);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border: oklch(0.9 0.006 260);
+  --input: oklch(0.9 0.006 260);
+  --ring: oklch(0.45 0.16 260);
+
+  /* Confidence ramp: >= 0.90 high, 0.60-0.90 medium, < 0.60 low. */
+  --confidence-high: oklch(0.94 0.05 150);
+  --confidence-high-foreground: oklch(0.32 0.09 150);
+  --confidence-medium: oklch(0.95 0.07 85);
+  --confidence-medium-foreground: oklch(0.36 0.09 70);
+  --confidence-low: oklch(0.94 0.05 25);
+  --confidence-low-foreground: oklch(0.38 0.14 27);
+
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: oklch(0.16 0.01 260);
+  --foreground: oklch(0.96 0.003 260);
+
+  --card: oklch(0.2 0.012 260);
+  --card-foreground: oklch(0.96 0.003 260);
+  --popover: oklch(0.2 0.012 260);
+  --popover-foreground: oklch(0.96 0.003 260);
+
+  --primary: oklch(0.72 0.14 260);
+  --primary-foreground: oklch(0.16 0.02 260);
+
+  --secondary: oklch(0.26 0.014 260);
+  --secondary-foreground: oklch(0.96 0.003 260);
+
+  --muted: oklch(0.26 0.014 260);
+  --muted-foreground: oklch(0.7 0.015 260);
+
+  --accent: oklch(0.29 0.02 260);
+  --accent-foreground: oklch(0.96 0.003 260);
+
+  --destructive: oklch(0.62 0.2 27);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border: oklch(0.3 0.014 260);
+  --input: oklch(0.32 0.014 260);
+  --ring: oklch(0.65 0.13 260);
+
+  --confidence-high: oklch(0.32 0.07 150);
+  --confidence-high-foreground: oklch(0.88 0.11 150);
+  --confidence-medium: oklch(0.34 0.08 75);
+  --confidence-medium-foreground: oklch(0.9 0.12 85);
+  --confidence-low: oklch(0.32 0.09 25);
+  --confidence-low-foreground: oklch(0.88 0.1 25);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-confidence-high: var(--confidence-high);
+  --color-confidence-high-foreground: var(--confidence-high-foreground);
+  --color-confidence-medium: var(--confidence-medium);
+  --color-confidence-medium-foreground: var(--confidence-medium-foreground);
+  --color-confidence-low: var(--confidence-low);
+  --color-confidence-low-foreground: var(--confidence-low-foreground);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Visible focus for keyboard users. The results grid is keyboard-driven, so
+     losing the focus ring would make it unusable. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Urdu and other Arabic-script names render with a Nastaliq face where one is
+     available, falling back to any installed Arabic face. */
+  [lang="ur"],
+  .font-urdu {
+    font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", serif;
+    line-height: 2.1;
+  }
+}
+
+@layer utilities {
+  /* Respect a reduced-motion preference across every animated component. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
