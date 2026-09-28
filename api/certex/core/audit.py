@@ -11,14 +11,13 @@ redaction policy as the logging pipeline before the row is written.
 
 from __future__ import annotations
 
-import datetime as dt
 import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from certex.db.base import JSONDict
+from certex.db.base import JSONDict, utcnow
 from certex.db.models import AuditLog
 from certex.enums import AuditAction
 from certex.logging_setup import SAFE_KEYS, get_logger
@@ -139,7 +138,7 @@ def _build_row(
         metadata_jsonb=sanitise_metadata(metadata),
         ip_address=context.ip_address,
         user_agent=context.user_agent,
-        created_at=dt.datetime.now(dt.UTC),
+        created_at=utcnow(),
     )
 
 

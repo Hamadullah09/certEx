@@ -4,6 +4,7 @@
     python -m certex.cli ensure-bucket
     python -m certex.cli create-user --email a@b.c --password ... --role ADMIN
     python -m certex.cli check
+    python -m certex.cli generate-types
 
 Every command is idempotent so container entrypoints can run them on each boot.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -58,7 +60,6 @@ def _seed(settings: Settings) -> int:
                     "confidence_auto_approve": settings.confidence_auto_approve,
                     "confidence_review_floor": settings.confidence_review_floor,
                     "ocr_languages": settings.ocr_languages,
-                    "llm_enabled": settings.llm_enabled,
                 },
             )
             session.add(workspace)
@@ -169,6 +170,17 @@ def _check(settings: Settings) -> int:
     return 1 if failures else 0
 
 
+def _generate_types() -> int:
+    """Write the TypeScript field schema the frontend imports."""
+    from certex.fields.typescript import write_typescript
+
+    # api/certex/cli.py -> the repository root.
+    root = Path(__file__).resolve().parents[2]
+    target = write_typescript(root)
+    print(f"[generate-types] wrote {target.relative_to(root)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="certex", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -176,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("seed", help="Create the demo workspace and role accounts.")
     sub.add_parser("ensure-bucket", help="Create the storage bucket and verify encryption.")
     sub.add_parser("check", help="Verify database, storage and broker connectivity.")
+    sub.add_parser("generate-types", help="Regenerate the frontend's copy of the field schema.")
 
     create = sub.add_parser("create-user", help="Create a user account.")
     create.add_argument("--email", required=True)
@@ -199,6 +212,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _ensure_bucket(settings)
     if args.command == "check":
         return _check(settings)
+    if args.command == "generate-types":
+        return _generate_types()
     if args.command == "create-user":
         return _create_user(settings, args.email, args.password, UserRole(args.role))
     return 1  # pragma: no cover - argparse enforces the choices

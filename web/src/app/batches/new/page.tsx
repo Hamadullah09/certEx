@@ -6,7 +6,9 @@ import {
   AlertCircle,
   CheckCircle2,
   Copy,
+  FilePlus2,
   FileText,
+  KeyRound,
   Loader2,
   Trash2,
   Upload,
@@ -26,10 +28,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/ui/page-header";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
-import { useBatchUpload, useCreateBatch } from "@/hooks/use-batches";
+import { type UploadItem, useBatchUpload, useCreateBatch } from "@/hooks/use-batches";
 import { ApiError } from "@/lib/api";
 import {
   ACCEPTED_EXTENSIONS,
@@ -38,6 +40,7 @@ import {
   MAX_BATCH_FILES,
   screenFiles,
 } from "@/lib/schemas/batches";
+import { needsPassword } from "@/lib/upload";
 import { formatBytes } from "@/lib/utils";
 
 import { UploadDropzone } from "./dropzone";
@@ -52,8 +55,66 @@ const CERTIFICATE_TYPES: { value: CertificateType; label: string }[] = [
 const OCR_LANGUAGES: { value: string; label: string }[] = [
   { value: "eng", label: "English" },
   { value: "urd", label: "Urdu" },
-  { value: "ara", label: "Arabic" },
 ];
+
+/*
+ * One tappable row per option: the whole 48px strip is the label, it tints when
+ * checked, and the box itself is 24px rather than 16px. Ticking a box should not
+ * need a steady hand.
+ */
+const OPTION_ROW =
+  "flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-3 text-base font-medium transition-colors hover:bg-accent hover:text-accent-foreground has-[:checked]:bg-primary-surface has-[:checked]:text-primary-surface-foreground has-[:disabled]:cursor-not-allowed has-[:disabled]:text-muted-foreground has-[:disabled]:hover:bg-transparent";
+
+/** Inline password entry for a PDF the server could not open. */
+function PasswordRetry({
+  item,
+  disabled,
+  onRetry,
+}: {
+  item: UploadItem;
+  disabled: boolean;
+  onRetry: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const inputId = React.useId();
+
+  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!password) return;
+    setBusy(true);
+    try {
+      await onRetry(password);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.userMessage : "Could not retry the upload.");
+    } finally {
+      setBusy(false);
+      setPassword("");
+    }
+  }
+
+  return (
+    <form onSubmit={(event) => void submit(event)} className="mt-3 flex flex-wrap items-center gap-3">
+      <Label htmlFor={inputId} className="sr-only">
+        Password for {item.file.name}
+      </Label>
+      <Input
+        id={inputId}
+        type="password"
+        autoComplete="off"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        placeholder="PDF password"
+        className="max-w-64"
+        disabled={disabled || busy}
+      />
+      <Button type="submit" variant="outline" disabled={disabled || busy || !password}>
+        {busy ? <Loader2 aria-hidden="true" className="animate-spin" /> : <KeyRound aria-hidden="true" />}
+        Unlock and retry
+      </Button>
+    </form>
+  );
+}
 
 export default function NewBatchPage() {
   const router = useRouter();
@@ -61,11 +122,9 @@ export default function NewBatchPage() {
 
   const [name, setName] = React.useState("");
   const [expectedTypes, setExpectedTypes] = React.useState<CertificateType[]>([]);
-  const [languages, setLanguages] = React.useState<string[]>(["eng"]);
+  const [languages, setLanguages] = React.useState<string[]>(["eng", "urd"]);
   const [autoApprove, setAutoApprove] = React.useState(0.9);
   const [reviewFloor, setReviewFloor] = React.useState(0.6);
-  const [llmEnabled, setLlmEnabled] = React.useState(true);
-  const [allowVision, setAllowVision] = React.useState(false);
   const [rejections, setRejections] = React.useState<FileRejection[]>([]);
   const [batchId, setBatchId] = React.useState<string | null>(null);
 
@@ -86,8 +145,13 @@ export default function NewBatchPage() {
   );
 
   const thresholdsValid = reviewFloor <= autoApprove;
+  const hasPending = upload.items.some((item) => item.phase !== "done" && item.phase !== "error");
   const canStart =
-    name.trim().length > 0 && upload.items.length > 0 && thresholdsValid && !upload.isUploading;
+    name.trim().length > 0 &&
+    upload.items.length > 0 &&
+    thresholdsValid &&
+    !upload.isUploading &&
+    (batchId === null || hasPending);
 
   async function handleStart(): Promise<void> {
     if (!canStart) return;
@@ -102,16 +166,14 @@ export default function NewBatchPage() {
             ocr_languages: languages.join("+"),
             confidence_auto_approve: autoApprove,
             confidence_review_floor: reviewFloor,
-            llm_enabled: llmEnabled,
-            allow_vision: allowVision,
           },
         });
         id = created.id;
         setBatchId(id);
       }
-      // The hook reads batchId from state, which has not flushed yet on the very
-      // first run, so the upload is kicked off on the next tick.
-      setTimeout(() => void upload.start(), 0);
+      // The id is passed explicitly: state set a moment ago is not visible to this
+      // handler yet, which is exactly how the first click used to upload nothing.
+      await upload.start(id);
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.userMessage : "Could not create the batch.",
@@ -126,26 +188,24 @@ export default function NewBatchPage() {
 
   return (
     <AppShell>
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">New batch</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Drop in certificates as PDF, Word, images or a ZIP. Scanned pages are
-            OCR&apos;d automatically.
-          </p>
-        </div>
-        <Button variant="ghost" onClick={() => router.push("/")}>
-          Cancel
-        </Button>
-      </div>
+      <PageHeader
+        icon={FilePlus2}
+        title="New batch"
+        description="Add certificates as PDF, Word, images or a ZIP. Scanned pages are read automatically."
+        actions={
+          <Button variant="outline" onClick={() => router.push("/")}>
+            Cancel
+          </Button>
+        }
+      />
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="space-y-6">
+      <div className="mt-9 grid gap-7 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="space-y-7">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Batch name</CardTitle>
+              <CardTitle>Step 1 · Name this batch</CardTitle>
               <CardDescription>
-                How this batch appears in the dashboard and in exported filenames.
+                How this batch appears in the list and in exported filenames.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -164,7 +224,17 @@ export default function NewBatchPage() {
             </CardContent>
           </Card>
 
-          <UploadDropzone onDrop={handleDrop} disabled={upload.isUploading} />
+          <Card>
+            <CardHeader>
+              <CardTitle>Step 2 · Add the files</CardTitle>
+              <CardDescription>
+                Drag a folder of scans straight in, or browse for them.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <UploadDropzone onDrop={handleDrop} disabled={upload.isUploading} />
+            </CardContent>
+          </Card>
 
           {rejections.length > 0 ? (
             <Alert variant="warning">
@@ -173,18 +243,18 @@ export default function NewBatchPage() {
                 {rejections.length} file{rejections.length === 1 ? "" : "s"} were not added
               </AlertTitle>
               <AlertDescription>
-                <ul className="mt-1 space-y-0.5">
+                <ul className="mt-2 space-y-1.5">
                   {rejections.slice(-5).map((rejection, index) => (
-                    <li key={`${rejection.file.name}-${index}`} className="truncate text-xs">
-                      <span className="font-medium">{rejection.file.name}</span> —{" "}
+                    <li key={`${rejection.file.name}-${index}`} className="text-base">
+                      <span className="font-semibold">{rejection.file.name}</span> —{" "}
                       {rejection.message}
                     </li>
                   ))}
                 </ul>
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="mt-2"
+                  className="mt-4"
                   onClick={() => setRejections([])}
                 >
                   Dismiss
@@ -195,41 +265,39 @@ export default function NewBatchPage() {
 
           {upload.items.length > 0 ? (
             <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0">
-                <div>
-                  <CardTitle className="text-base">
+              <CardHeader className="flex-row items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <CardTitle>
                     {upload.items.length.toLocaleString()} file
-                    {upload.items.length === 1 ? "" : "s"}
+                    {upload.items.length === 1 ? "" : "s"} ready
                   </CardTitle>
-                  <CardDescription>
+                  <CardDescription className="mt-2">
                     {formatBytes(upload.stats.bytes)} total
-                    {upload.stats.done > 0
-                      ? ` · ${upload.stats.done} uploaded`
-                      : ""}
+                    {upload.stats.done > 0 ? ` · ${upload.stats.done} uploaded` : ""}
                     {upload.stats.duplicates > 0
                       ? ` · ${upload.stats.duplicates} duplicate`
                       : ""}
                     {upload.stats.failed > 0 ? ` · ${upload.stats.failed} rejected` : ""}
                   </CardDescription>
                 </div>
-                {!upload.isUploading ? (
-                  <Button variant="ghost" size="sm" onClick={upload.clear}>
+                {!upload.isUploading && !batchId ? (
+                  <Button variant="outline" size="sm" onClick={upload.clear}>
                     <Trash2 aria-hidden="true" />
                     Clear
                   </Button>
                 ) : null}
               </CardHeader>
-              <CardContent className="max-h-96 overflow-y-auto p-0">
-                <ul className="divide-y divide-border">
+              <CardContent className="max-h-[36rem] overflow-y-auto p-0">
+                <ul className="divide-y divide-border-subtle border-t border-border-subtle">
                   {upload.items.map((item) => (
-                    <li key={item.id} className="flex items-center gap-3 px-6 py-2.5">
+                    <li key={item.id} className="flex items-start gap-4 px-7 py-4">
                       <FileText
                         aria-hidden="true"
-                        className="size-4 shrink-0 text-muted-foreground"
+                        className="mt-1 size-6 shrink-0 text-muted-foreground"
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm">{item.file.name}</p>
-                        <div className="mt-1 flex items-center gap-2">
+                        <p className="truncate text-base font-medium">{item.file.name}</p>
+                        <div className="mt-2 flex items-center gap-3">
                           <Progress
                             value={item.progress * 100}
                             label={`${item.file.name} upload progress`}
@@ -240,49 +308,70 @@ export default function NewBatchPage() {
                                   ? "success"
                                   : "default"
                             }
-                            className="h-1"
+                            className="h-2.5"
                           />
-                          <span className="w-20 shrink-0 text-right text-xs text-muted-foreground">
+                          <span className="w-20 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
                             {formatBytes(item.file.size)}
                           </span>
                         </div>
                         {item.error ? (
-                          <p className="mt-1 text-xs text-destructive">{item.error}</p>
+                          <div className="mt-2" role="status">
+                            <p className="text-base font-semibold text-destructive">
+                              {item.error}
+                            </p>
+                            {item.remediation ? (
+                              <p className="mt-0.5 text-base text-muted-foreground">
+                                {item.remediation}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {item.phase === "error" && needsPassword(item.errorCode) ? (
+                          <PasswordRetry
+                            item={item}
+                            disabled={upload.isUploading}
+                            onRetry={(password) => upload.retryWithPassword(item.id, password)}
+                          />
                         ) : null}
                         {item.result?.is_duplicate ? (
-                          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                            <Copy aria-hidden="true" className="size-3" />
-                            Already in this workspace — reusing the earlier extraction.
+                          <p className="mt-2 flex items-center gap-2 text-base text-muted-foreground">
+                            <Copy aria-hidden="true" className="size-5 shrink-0" />
+                            Already in this workspace — reusing the earlier reading.
                           </p>
                         ) : null}
                         {item.result && item.result.children.length > 0 ? (
-                          <p className="mt-1 text-xs text-muted-foreground">
+                          <p className="mt-2 text-base text-muted-foreground">
                             Unpacked {item.result.children.length} document
                             {item.result.children.length === 1 ? "" : "s"} from the archive.
                           </p>
                         ) : null}
                       </div>
 
+                      {/* An svg carrying an aria-label needs role="img" for the
+                          label to be announced at all. */}
                       {item.phase === "done" ? (
                         <CheckCircle2
+                          role="img"
                           aria-label="Uploaded"
-                          className="size-4 shrink-0 text-confidence-high-foreground"
+                          className="mt-1 size-6 shrink-0 text-success"
                         />
                       ) : item.phase === "error" ? (
                         <AlertCircle
+                          role="img"
                           aria-label="Rejected"
-                          className="size-4 shrink-0 text-destructive"
+                          className="mt-1 size-6 shrink-0 text-destructive"
                         />
                       ) : item.phase === "uploading" ? (
                         <Loader2
+                          role="img"
                           aria-label="Uploading"
-                          className="size-4 shrink-0 animate-spin text-muted-foreground"
+                          className="mt-1 size-6 shrink-0 animate-spin text-primary"
                         />
                       ) : (
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="size-7 shrink-0"
+                          size="icon-sm"
+                          className="shrink-0"
                           aria-label={`Remove ${item.file.name}`}
                           onClick={() => upload.removeFile(item.id)}
                         >
@@ -297,31 +386,33 @@ export default function NewBatchPage() {
           ) : null}
         </div>
 
-        <aside className="space-y-6">
+        <aside className="space-y-7">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Processing settings</CardTitle>
+              <CardTitle>How to read them</CardTitle>
               <CardDescription>
-                Frozen onto this batch, so later changes to workspace defaults do not
+                Saved onto this batch, so later changes to workspace defaults do not
                 alter how these documents were read.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-5">
-              <fieldset disabled={Boolean(batchId)} className="space-y-5">
-                <div>
-                  <legend className="text-sm font-medium">Certificate types expected</legend>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Leave all unchecked to accept any type.
+            <CardContent className="space-y-6">
+              {/* One outer fieldset carries the locked state; each group is its
+                  own fieldset so its legend is really the group's name rather
+                  than a bold line that happens to sit above it. */}
+              <fieldset disabled={Boolean(batchId)} className="min-w-0 space-y-6">
+                <fieldset className="min-w-0">
+                  <legend className="text-base font-semibold text-foreground">
+                    Certificates to expect
+                  </legend>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Leave all of them unticked to accept any kind.
                   </p>
-                  <div className="mt-2 space-y-1.5">
+                  <div className="mt-3 space-y-1">
                     {CERTIFICATE_TYPES.map((type) => (
-                      <label
-                        key={type.value}
-                        className="flex cursor-pointer items-center gap-2 text-sm"
-                      >
+                      <label key={type.value} className={OPTION_ROW}>
                         <input
                           type="checkbox"
-                          className="size-4 rounded border-input accent-primary"
+                          className="size-6 shrink-0 accent-primary"
                           checked={expectedTypes.includes(type.value)}
                           onChange={(event) =>
                             setExpectedTypes((current) =>
@@ -335,24 +426,24 @@ export default function NewBatchPage() {
                       </label>
                     ))}
                   </div>
-                </div>
+                </fieldset>
 
-                <Separator />
+                <Separator tone="subtle" />
 
-                <div>
-                  <legend className="text-sm font-medium">OCR languages</legend>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Used for scanned pages. Add Urdu for Nastaliq documents.
+                <fieldset className="min-w-0">
+                  <legend className="text-base font-semibold text-foreground">
+                    Languages on the certificates
+                  </legend>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Used when a page is a scan. Keep Urdu on for certificates written in
+                    both languages.
                   </p>
-                  <div className="mt-2 space-y-1.5">
+                  <div className="mt-3 space-y-1">
                     {OCR_LANGUAGES.map((language) => (
-                      <label
-                        key={language.value}
-                        className="flex cursor-pointer items-center gap-2 text-sm"
-                      >
+                      <label key={language.value} className={OPTION_ROW}>
                         <input
                           type="checkbox"
-                          className="size-4 rounded border-input accent-primary"
+                          className="size-6 shrink-0 accent-primary"
                           checked={languages.includes(language.value)}
                           onChange={(event) =>
                             setLanguages((current) => {
@@ -368,16 +459,18 @@ export default function NewBatchPage() {
                       </label>
                     ))}
                   </div>
-                </div>
+                </fieldset>
 
-                <Separator />
+                <Separator tone="subtle" />
 
-                <div className="space-y-3">
+                <fieldset className="min-w-0 space-y-5">
+                  <legend className="text-base font-semibold text-foreground">
+                    How sure the app must be
+                  </legend>
+
                   <div>
-                    <Label htmlFor="auto-approve" className="text-sm">
-                      Auto-approve at or above
-                    </Label>
-                    <div className="mt-1 flex items-center gap-3">
+                    <Label htmlFor="auto-approve">Accept on its own at or above</Label>
+                    <div className="mt-2 flex items-center gap-4">
                       <input
                         id="auto-approve"
                         type="range"
@@ -386,19 +479,19 @@ export default function NewBatchPage() {
                         step={0.01}
                         value={autoApprove}
                         onChange={(event) => setAutoApprove(Number(event.target.value))}
-                        className="w-full accent-primary"
+                        aria-describedby="threshold-help"
+                        aria-invalid={!thresholdsValid}
+                        className="h-11 w-full cursor-pointer accent-primary"
                       />
-                      <span className="w-12 shrink-0 text-right text-sm tabular-nums">
+                      <span className="w-14 shrink-0 text-right text-lg font-bold tabular-nums">
                         {Math.round(autoApprove * 100)}%
                       </span>
                     </div>
                   </div>
 
                   <div>
-                    <Label htmlFor="review-floor" className="text-sm">
-                      Fail below
-                    </Label>
-                    <div className="mt-1 flex items-center gap-3">
+                    <Label htmlFor="review-floor">Mark as failed below</Label>
+                    <div className="mt-2 flex items-center gap-4">
                       <input
                         id="review-floor"
                         type="range"
@@ -407,82 +500,58 @@ export default function NewBatchPage() {
                         step={0.01}
                         value={reviewFloor}
                         onChange={(event) => setReviewFloor(Number(event.target.value))}
-                        className="w-full accent-primary"
+                        aria-describedby="threshold-help"
+                        aria-invalid={!thresholdsValid}
+                        className="h-11 w-full cursor-pointer accent-primary"
                       />
-                      <span className="w-12 shrink-0 text-right text-sm tabular-nums">
+                      <span className="w-14 shrink-0 text-right text-lg font-bold tabular-nums">
                         {Math.round(reviewFloor * 100)}%
                       </span>
                     </div>
                   </div>
 
+                  {/* One id in both states, so the sliders always describe
+                      themselves with whichever message is on screen. */}
                   {!thresholdsValid ? (
-                    <p className="text-xs text-destructive">
-                      The failure threshold must sit below the auto-approve threshold.
+                    <p
+                      id="threshold-help"
+                      className="flex items-start gap-2 text-base font-semibold text-destructive"
+                    >
+                      <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0" />
+                      The failed number must be smaller than the accept number.
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Rows between {Math.round(reviewFloor * 100)}% and{" "}
-                      {Math.round(autoApprove * 100)}% go to review.
+                    <p id="threshold-help" className="text-base text-muted-foreground">
+                      Anything between {Math.round(reviewFloor * 100)}% and{" "}
+                      {Math.round(autoApprove * 100)}% goes to a person to check.
                     </p>
                   )}
-                </div>
-
-                <Separator />
-
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Label htmlFor="llm-enabled" className="text-sm">
-                        LLM fallback
-                      </Label>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Used only for fields the rules could not read. Turn off to keep
-                        all text inside this deployment.
-                      </p>
-                    </div>
-                    <Switch
-                      id="llm-enabled"
-                      checked={llmEnabled}
-                      onCheckedChange={setLlmEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Label htmlFor="allow-vision" className="text-sm">
-                        Allow page images
-                      </Label>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Sends page images to the model only when text extraction found
-                        nothing at all.
-                      </p>
-                    </div>
-                    <Switch
-                      id="allow-vision"
-                      checked={allowVision}
-                      disabled={!llmEnabled}
-                      onCheckedChange={setAllowVision}
-                    />
-                  </div>
-                </div>
+                </fieldset>
               </fieldset>
 
               {batchId ? (
-                <p className="text-xs text-muted-foreground">
-                  Settings are locked once the batch exists.
+                <p className="rounded-lg bg-muted px-4 py-3 text-base text-muted-foreground">
+                  These settings are locked now that the batch exists.
                 </p>
               ) : null}
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="space-y-3 pt-6">
-              {allDone ? (
-                <Button className="w-full" onClick={() => router.push(`/batches/${batchId}`)}>
+          {/* Sticky so the upload button stays reachable while someone scrolls a
+              long file list on the left. */}
+          <Card className="lg:sticky lg:top-28">
+            <CardContent className="space-y-4 pt-7">
+              {allDone && batchId ? (
+                <Button
+                  size="lg"
+                  className="w-full"
+                  onClick={() => router.push(`/batches/${batchId}`)}
+                >
                   View batch
                 </Button>
               ) : (
                 <Button
+                  size="lg"
                   className="w-full"
                   onClick={() => void handleStart()}
                   disabled={!canStart || createBatch.isPending}
@@ -503,14 +572,14 @@ export default function NewBatchPage() {
               )}
 
               {upload.isUploading ? (
-                <Button variant="outline" className="w-full" onClick={upload.cancel}>
+                <Button variant="outline" size="lg" className="w-full" onClick={upload.cancel}>
                   Cancel upload
                 </Button>
               ) : null}
 
-              <p className="text-xs text-muted-foreground">
-                Up to {MAX_BATCH_FILES.toLocaleString()} files, 500 MB each.
-                Accepted: {ACCEPTED_EXTENSIONS.join(", ")}.
+              <p className="text-sm text-muted-foreground">
+                Up to {MAX_BATCH_FILES.toLocaleString()} files, 500 MB each. Files over 8 MB
+                upload in resumable chunks. Accepted: {ACCEPTED_EXTENSIONS.join(", ")}.
               </p>
             </CardContent>
           </Card>

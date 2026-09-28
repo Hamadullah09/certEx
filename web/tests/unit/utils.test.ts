@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { confidenceBand, formatBytes, formatConfidence } from "@/lib/utils";
+import {
+  confidenceBand,
+  confidenceClass,
+  describeConfidence,
+  formatBytes,
+  formatConfidence,
+} from "@/lib/utils";
 
 describe("confidenceBand", () => {
   it("bands at the server's review thresholds", () => {
@@ -28,6 +34,36 @@ describe("formatConfidence", () => {
 
   it("renders a dash when there is no score", () => {
     expect(formatConfidence(null)).toBe("-");
+  });
+});
+
+describe("confidenceClass", () => {
+  it("shades from the confidence ramp, and only from it", () => {
+    expect(confidenceClass(0.95)).toContain("bg-confidence-high");
+    expect(confidenceClass(0.7)).toContain("bg-confidence-medium");
+    expect(confidenceClass(0.2)).toContain("bg-confidence-low");
+  });
+
+  it("pairs every fill with its own ink, so a shaded cell is always legible", () => {
+    expect(confidenceClass(0.95)).toContain("text-confidence-high-foreground");
+    expect(confidenceClass(0.7)).toContain("text-confidence-medium-foreground");
+    expect(confidenceClass(0.2)).toContain("text-confidence-low-foreground");
+  });
+
+  it("shades nothing when there is no score to shade by", () => {
+    expect(confidenceClass(null)).toBe("");
+  });
+});
+
+describe("describeConfidence", () => {
+  it("says the number and the band, which is what the aria-label carries", () => {
+    expect(describeConfidence(0.95)).toBe("95% - high confidence");
+    expect(describeConfidence(0.7)).toContain("worth checking");
+    expect(describeConfidence(0.2)).toContain("please check");
+  });
+
+  it("says so plainly when nothing was scored", () => {
+    expect(describeConfidence(null)).toBe("no confidence score");
   });
 });
 

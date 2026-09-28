@@ -35,3 +35,35 @@ export function confidenceBand(value: number | null | undefined): ConfidenceBand
   if (value >= 0.6) return "medium";
   return "low";
 }
+
+/**
+ * Confidence-ramp fill and ink for a result cell.
+ *
+ * Shared by the grid and the review pane so one field cannot be shaded two ways.
+ * The shading is never the only signal: every cell that carries it also prints the
+ * percentage and names the band in its `aria-label`.
+ */
+const CONFIDENCE_CLASS: Record<ConfidenceBand, string> = {
+  high: "bg-confidence-high text-confidence-high-foreground",
+  medium: "bg-confidence-medium text-confidence-medium-foreground",
+  low: "bg-confidence-low text-confidence-low-foreground",
+  unknown: "",
+};
+
+export function confidenceClass(value: number | null | undefined): string {
+  return CONFIDENCE_CLASS[confidenceBand(value)];
+}
+
+/** How the band is said out loud, for a title and an aria-label. */
+const CONFIDENCE_WORD: Record<ConfidenceBand, string> = {
+  high: "high confidence",
+  medium: "medium confidence, worth checking",
+  low: "low confidence, please check",
+  unknown: "no confidence score",
+};
+
+export function describeConfidence(value: number | null | undefined): string {
+  const band = confidenceBand(value);
+  if (band === "unknown") return CONFIDENCE_WORD.unknown;
+  return `${formatConfidence(value)} - ${CONFIDENCE_WORD[band]}`;
+}

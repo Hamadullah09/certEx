@@ -9,7 +9,16 @@
 
 /*
  * Design tokens. Foreground/background pairs are chosen to clear WCAG AA (4.5:1
- * for body text, 3:1 for large text and UI borders) in both themes.
+ * for body text, 3:1 for large text and UI borders) in both themes; body copy
+ * clears AAA (7:1) because the people using this work long shifts on modest
+ * screens and are often reading in their second script.
+ *
+ * Each semantic family is a quartet rather than a single hue: `X` is the solid
+ * fill, `X-foreground` the ink that sits on it, `X-surface` the tint for
+ * inline panels, and `X-surface-foreground` the ink for that tint. The earlier
+ * palette had no tints of its own and borrowed the confidence ramp for badges
+ * and alerts, which meant an "uploading" badge and a low-confidence field were
+ * saying the same thing in the same colour.
  *
  * The confidence ramp is the one palette that carries meaning rather than
  * decoration: it shades result cells by extraction confidence. It is never the
@@ -17,78 +26,134 @@
  * aria-label - because colour alone fails for colour-blind reviewers.
  */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.17 0.01 260);
+  /* The page is tinted and cards are pure white, so a card reads as a raised
+     surface without needing a heavy shadow. */
+  --background: oklch(0.974 0.012 255);
+  --foreground: oklch(0.24 0.035 265);
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.17 0.01 260);
+  --card-foreground: oklch(0.24 0.035 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.17 0.01 260);
+  --popover-foreground: oklch(0.24 0.035 265);
 
-  --primary: oklch(0.45 0.16 260);
-  --primary-foreground: oklch(0.99 0 0);
+  --primary: oklch(0.47 0.185 267);
+  --primary-foreground: oklch(0.99 0.004 267);
+  --primary-surface: oklch(0.945 0.021 267);
+  --primary-surface-foreground: oklch(0.34 0.13 267);
+  --primary-border: oklch(0.56 0.16 267);
 
-  --secondary: oklch(0.96 0.005 260);
-  --secondary-foreground: oklch(0.25 0.01 260);
+  /* Secondary is a second voice, not a grey: it marks work in flight
+     (uploading, queued, processing) where primary would claim an action. */
+  --secondary: oklch(0.94 0.045 205);
+  --secondary-foreground: oklch(0.34 0.073 218);
+  --secondary-border: oklch(0.55 0.09 212);
 
-  --muted: oklch(0.96 0.005 260);
-  --muted-foreground: oklch(0.45 0.015 260);
+  --muted: oklch(0.952 0.016 255);
+  --muted-foreground: oklch(0.425 0.045 262);
 
-  --accent: oklch(0.95 0.015 260);
-  --accent-foreground: oklch(0.25 0.02 260);
+  --accent: oklch(0.945 0.021 288);
+  --accent-foreground: oklch(0.3 0.11 288);
 
-  --destructive: oklch(0.52 0.21 27);
-  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.5 0.135 152);
+  --success-foreground: oklch(0.99 0.01 152);
+  --success-surface: oklch(0.945 0.055 152);
+  --success-surface-foreground: oklch(0.34 0.1 152);
+  --success-border: oklch(0.55 0.12 152);
 
-  --border: oklch(0.9 0.006 260);
-  --input: oklch(0.9 0.006 260);
-  --ring: oklch(0.45 0.16 260);
+  /* The solid warning is a deep orange, not the bright amber of its tint. Amber
+     is the one hue that cannot do both jobs on a light page: bright enough to
+     read as "attention" and it no longer clears 3:1 against the white progress
+     track it fills. The tint below keeps the bright amber, where the ink on it
+     is dark and contrast is not at risk. */
+  --warning: oklch(0.565 0.155 52);
+  --warning-foreground: oklch(0.99 0.006 80);
+  --warning-surface: oklch(0.955 0.046 85);
+  --warning-surface-foreground: oklch(0.38 0.1 62);
+  --warning-border: oklch(0.575 0.13 70);
+
+  --destructive: oklch(0.52 0.215 26);
+  --destructive-foreground: oklch(0.99 0.004 26);
+  --destructive-surface: oklch(0.95 0.024 22);
+  --destructive-surface-foreground: oklch(0.4 0.16 27);
+  --destructive-border: oklch(0.56 0.19 26);
+
+  /* `border` is a component boundary and clears the 3:1 that WCAG 1.4.11 asks
+     of one. `border-subtle` is for hairlines inside a component - table row
+     rules, list dividers - which are decorative and would read as a cage at
+     3:1. */
+  --border: oklch(0.63 0.035 258);
+  --border-subtle: oklch(0.89 0.018 258);
+  --input: oklch(0.58 0.04 260);
+  --ring: oklch(0.5 0.2 267);
 
   /* Confidence ramp: >= 0.90 high, 0.60-0.90 medium, < 0.60 low. */
-  --confidence-high: oklch(0.94 0.05 150);
-  --confidence-high-foreground: oklch(0.32 0.09 150);
-  --confidence-medium: oklch(0.95 0.07 85);
-  --confidence-medium-foreground: oklch(0.36 0.09 70);
-  --confidence-low: oklch(0.94 0.05 25);
-  --confidence-low-foreground: oklch(0.38 0.14 27);
+  --confidence-high: oklch(0.94 0.06 152);
+  --confidence-high-foreground: oklch(0.33 0.1 152);
+  --confidence-medium: oklch(0.95 0.052 85);
+  --confidence-medium-foreground: oklch(0.37 0.1 62);
+  --confidence-low: oklch(0.945 0.026 22);
+  --confidence-low-foreground: oklch(0.4 0.16 27);
 
-  --radius: 0.5rem;
+  --radius: 0.75rem;
 }
 
 .dark {
-  --background: oklch(0.16 0.01 260);
-  --foreground: oklch(0.96 0.003 260);
+  --background: oklch(0.19 0.025 265);
+  --foreground: oklch(0.96 0.012 255);
 
-  --card: oklch(0.2 0.012 260);
-  --card-foreground: oklch(0.96 0.003 260);
-  --popover: oklch(0.2 0.012 260);
-  --popover-foreground: oklch(0.96 0.003 260);
+  --card: oklch(0.235 0.028 265);
+  --card-foreground: oklch(0.96 0.012 255);
+  --popover: oklch(0.255 0.03 265);
+  --popover-foreground: oklch(0.96 0.012 255);
 
-  --primary: oklch(0.72 0.14 260);
-  --primary-foreground: oklch(0.16 0.02 260);
+  /* Every solid fill flips to a light tint with dark ink in this theme. A dark
+     fill with white ink cannot reach 4.5:1 against a dark page without the
+     fill disappearing into it. */
+  --primary: oklch(0.76 0.105 265);
+  --primary-foreground: oklch(0.18 0.05 265);
+  --primary-surface: oklch(0.31 0.06 265);
+  --primary-surface-foreground: oklch(0.88 0.05 265);
+  --primary-border: oklch(0.52 0.1 265);
 
-  --secondary: oklch(0.26 0.014 260);
-  --secondary-foreground: oklch(0.96 0.003 260);
+  --secondary: oklch(0.31 0.05 210);
+  --secondary-foreground: oklch(0.92 0.06 205);
+  --secondary-border: oklch(0.56 0.09 208);
 
-  --muted: oklch(0.26 0.014 260);
-  --muted-foreground: oklch(0.7 0.015 260);
+  --muted: oklch(0.27 0.03 262);
+  --muted-foreground: oklch(0.805 0.03 258);
 
-  --accent: oklch(0.29 0.02 260);
-  --accent-foreground: oklch(0.96 0.003 260);
+  --accent: oklch(0.32 0.055 288);
+  --accent-foreground: oklch(0.92 0.032 288);
 
-  --destructive: oklch(0.62 0.2 27);
-  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.76 0.15 152);
+  --success-foreground: oklch(0.19 0.05 152);
+  --success-surface: oklch(0.31 0.07 152);
+  --success-surface-foreground: oklch(0.88 0.13 152);
+  --success-border: oklch(0.5 0.11 152);
 
-  --border: oklch(0.3 0.014 260);
-  --input: oklch(0.32 0.014 260);
-  --ring: oklch(0.65 0.13 260);
+  --warning: oklch(0.82 0.15 80);
+  --warning-foreground: oklch(0.24 0.055 58);
+  --warning-surface: oklch(0.33 0.07 70);
+  --warning-surface-foreground: oklch(0.9 0.105 84);
+  --warning-border: oklch(0.55 0.12 76);
 
-  --confidence-high: oklch(0.32 0.07 150);
-  --confidence-high-foreground: oklch(0.88 0.11 150);
-  --confidence-medium: oklch(0.34 0.08 75);
-  --confidence-medium-foreground: oklch(0.9 0.12 85);
-  --confidence-low: oklch(0.32 0.09 25);
-  --confidence-low-foreground: oklch(0.88 0.1 25);
+  --destructive: oklch(0.7 0.17 25);
+  --destructive-foreground: oklch(0.18 0.045 25);
+  --destructive-surface: oklch(0.32 0.08 22);
+  --destructive-surface-foreground: oklch(0.88 0.055 22);
+  --destructive-border: oklch(0.52 0.15 25);
+
+  --border: oklch(0.575 0.035 262);
+  --border-subtle: oklch(0.33 0.028 262);
+  --input: oklch(0.62 0.045 262);
+  --ring: oklch(0.74 0.115 265);
+
+  --confidence-high: oklch(0.31 0.07 152);
+  --confidence-high-foreground: oklch(0.88 0.13 152);
+  --confidence-medium: oklch(0.33 0.07 70);
+  --confidence-medium-foreground: oklch(0.9 0.105 84);
+  --confidence-low: oklch(0.32 0.08 22);
+  --confidence-low-foreground: oklch(0.88 0.055 22);
 }
 
 @theme inline {
@@ -100,15 +165,33 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-surface: var(--primary-surface);
+  --color-primary-surface-foreground: var(--primary-surface-foreground);
+  --color-primary-border: var(--primary-border);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-border: var(--secondary-border);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-surface: var(--success-surface);
+  --color-success-surface-foreground: var(--success-surface-foreground);
+  --color-success-border: var(--success-border);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-surface: var(--warning-surface);
+  --color-warning-surface-foreground: var(--warning-surface-foreground);
+  --color-warning-border: var(--warning-border);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-surface: var(--destructive-surface);
+  --color-destructive-surface-foreground: var(--destructive-surface-foreground);
+  --color-destructive-border: var(--destructive-border);
   --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
@@ -119,9 +202,55 @@
   --color-confidence-low: var(--confidence-low);
   --color-confidence-low-foreground: var(--confidence-low-foreground);
 
+  --radius-sm: calc(var(--radius) - 0.375rem);
+  --radius-md: calc(var(--radius) - 0.25rem);
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 0.25rem);
+  --radius-2xl: calc(var(--radius) + 0.5rem);
+}
+
+/*
+ * Type scale. Base is 18px rather than 16px, and the bottom of the ramp is
+ * clamped at 16px, so nothing in the product can render body copy smaller than
+ * that however a component was written. Steps below `base` are deliberately
+ * close together - `text-xs` and `text-sm` exist to de-emphasise, and they now
+ * do it with weight and colour instead of with size.
+ *
+ * The rem root stays at 16px; only the inherited font size moves. Scaling the
+ * root would drag Tailwind's whole spacing scale with it.
+ */
+@theme {
+  --text-xs: 1rem; /* 16px */
+  --text-xs--line-height: 1.5;
+  --text-sm: 1.0625rem; /* 17px */
+  --text-sm--line-height: 1.55;
+  --text-base: 1.125rem; /* 18px */
+  --text-base--line-height: 1.6;
+  --text-lg: 1.3125rem; /* 21px */
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.5rem; /* 24px */
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.75rem; /* 28px */
+  --text-2xl--line-height: 1.3;
+  --text-3xl: 2.125rem; /* 34px */
+  --text-3xl--line-height: 1.22;
+  --text-4xl: 2.5rem; /* 40px */
+  --text-4xl--line-height: 1.15;
+  --text-5xl: 3rem; /* 48px */
+  --text-5xl--line-height: 1.08;
+
+  /* A system stack, so the app needs no webfont round-trip on the office LAN
+     and still gets Segoe UI on the Windows machines it runs on. */
+  --font-sans:
+    "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Shadows carry the page's hue rather than neutral black, which keeps a card
+     edge from looking like a smudge against the tinted background. */
+  --shadow-soft: 0 1px 2px oklch(0.24 0.035 265 / 0.06), 0 2px 8px oklch(0.24 0.035 265 / 0.05);
+  --shadow-lift:
+    0 2px 4px oklch(0.24 0.035 265 / 0.07), 0 8px 20px -4px oklch(0.24 0.035 265 / 0.1);
 }
 
 @layer base {
@@ -129,18 +258,52 @@
     border-color: var(--border);
   }
 
+  html {
+    /* Anchor scrolling clears the sticky header. */
+    scroll-padding-top: 6rem;
+  }
+
   body {
     background-color: var(--background);
     color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.6;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings are set tighter than body copy and carry their weight here so a
+     page cannot accidentally ship a 20px "heading" that reads as a paragraph. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  /* Short measures read better balanced; long paragraphs only need no orphan. */
+  p {
+    text-wrap: pretty;
   }
 
   /* Visible focus for keyboard users. The results grid is keyboard-driven, so
-     losing the focus ring would make it unusable. */
+     losing the focus ring would make it unusable. Three pixels rather than two:
+     the ring has to survive a scratched 1366x768 office monitor. */
   :focus-visible {
-    outline: 2px solid var(--ring);
+    outline: 3px solid var(--ring);
     outline-offset: 2px;
+  }
+
+  /* Windows High Contrast mode replaces the palette outright; keep the focus
+     ring by asking for the system colour instead of ours. */
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline-color: Highlight;
+    }
   }
 
   /* Urdu and other Arabic-script names render with a Nastaliq face where one is
@@ -149,6 +312,11 @@
   .font-urdu {
     font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", serif;
     line-height: 2.1;
+  }
+
+  /* Numeric columns line up and stay comparable at a glance. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -163,5 +331,32 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+  }
+
+  /* Page-level wash behind the app chrome. Two very wide, very soft tints -
+     primary at the top left, secondary at the top right - so the shell reads as
+     deliberately coloured rather than as a grey box, at a strength that cannot
+     disturb text contrast. */
+  .app-canvas {
+    background-image:
+      radial-gradient(60rem 28rem at 12% -6rem, var(--primary-surface), transparent 70%),
+      radial-gradient(52rem 26rem at 92% -8rem, var(--secondary), transparent 72%);
+    background-repeat: no-repeat;
+  }
+
+  /* Minimum comfortable hit target. Applied to controls that are visually
+     smaller than 44px so the tappable area still is - the pseudo-element grows
+     the target without moving the layout around it. */
+  .tap-target {
+    position: relative;
+  }
+
+  .tap-target::after {
+    content: "";
+    position: absolute;
+    inset: 50% 50%;
+    min-width: 44px;
+    min-height: 44px;
+    translate: -50% -50%;
   }
 }

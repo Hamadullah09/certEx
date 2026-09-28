@@ -20,13 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field
 __all__ = [
     "AppError",
     "BadRequestError",
+    "BatchNotReadyError",
     "ConflictError",
+    "ConversionUnavailableError",
     "CorruptDocumentError",
     "EncryptedDocumentError",
     "ErrorCode",
     "FieldError",
     "ForbiddenError",
-    "LLMUnavailableError",
     "NotFoundError",
     "OCRUnavailableError",
     "PayloadTooLargeError",
@@ -35,7 +36,9 @@ __all__ = [
     "StorageUnavailableError",
     "UnauthorizedError",
     "UnsupportedMediaTypeError",
+    "UploadIncompleteError",
     "ValidationFailedError",
+    "remediation_for",
 ]
 
 _PROBLEM_BASE_URI = "https://certextract.invalid/problems"
@@ -79,9 +82,8 @@ class ErrorCode(str, enum.Enum):
     NO_TEXT_EXTRACTED = "no_text_extracted"
     OCR_UNAVAILABLE = "ocr_unavailable"
     CONVERSION_UNAVAILABLE = "conversion_unavailable"
-    LLM_UNAVAILABLE = "llm_unavailable"
-    LLM_RATE_LIMITED = "llm_rate_limited"
     BATCH_NOT_READY = "batch_not_ready"
+    PROCESSING_TIMEOUT = "processing_timeout"
 
     # -- infrastructure --
     STORAGE_UNAVAILABLE = "storage_unavailable"
@@ -216,6 +218,20 @@ class ConflictError(AppError):
     title = "Conflicting state"
 
 
+class UploadIncompleteError(AppError):
+    status = 409
+    code = ErrorCode.UPLOAD_INCOMPLETE
+    title = "Upload is incomplete"
+    remediation = "Send the remaining chunks, then complete the upload."
+
+
+class BatchNotReadyError(AppError):
+    status = 409
+    code = ErrorCode.BATCH_NOT_READY
+    title = "Batch is not ready to process"
+    remediation = "Upload at least one file and let every upload finish, then start again."
+
+
 class PayloadTooLargeError(AppError):
     status = 413
     code = ErrorCode.FILE_TOO_LARGE
@@ -289,11 +305,40 @@ class OCRUnavailableError(AppError):
     )
 
 
-class LLMUnavailableError(AppError):
-    status = 503
-    code = ErrorCode.LLM_UNAVAILABLE
-    title = "Language model unavailable"
+class ProcessingTimeoutError(AppError):
+    status = 504
+    code = ErrorCode.PROCESSING_TIMEOUT
+    title = "Reading the document took too long"
     remediation = (
-        "Rule-based extraction still ran. Re-run extraction for the affected rows "
-        "once the provider is reachable, or disable the LLM fallback in settings."
+        "The page was stopped after the time limit. Re-scan it at a lower resolution, "
+        "or split a very large file into smaller ones, and upload again."
     )
+
+
+class ConversionUnavailableError(AppError):
+    status = 422
+    code = ErrorCode.CONVERSION_UNAVAILABLE
+    title = "Legacy Word document cannot be converted"
+    remediation = (
+        "Open the file in Word and save it as .docx or PDF, then upload that copy. "
+        "Converting .doc needs LibreOffice, which this deployment does not have."
+    )
+
+
+def remediation_for(code: str | None) -> str | None:
+    """The default "what to do next" sentence for a stored error code.
+
+    Documents persist only their ``error_code`` and message; the remediation is
+    looked up from the error class that owns the code, so the advice shown for an
+    old failure improves when the class's wording does. Error classes defined in
+    other modules register themselves simply by subclassing :class:`AppError`.
+    """
+    if not code:
+        return None
+    pending: list[type[AppError]] = [AppError]
+    while pending:
+        error_class = pending.pop()
+        pending.extend(error_class.__subclasses__())
+        if error_class.code.value == code and error_class.remediation:
+            return error_class.remediation
+    return None

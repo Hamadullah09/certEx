@@ -13,11 +13,11 @@ const BATCH_PRESENTATION: Record<
 > = {
   CREATED: { label: "Draft", variant: "outline", Icon: Clock },
   UPLOADING: { label: "Uploading", variant: "default", Icon: Upload },
-  QUEUED: { label: "Queued", variant: "default", Icon: Clock },
-  PROCESSING: { label: "Processing", variant: "default", Icon: Loader2, spin: true },
-  COMPLETED: { label: "Completed", variant: "success", Icon: CheckCircle2 },
+  QUEUED: { label: "Waiting", variant: "default", Icon: Clock },
+  PROCESSING: { label: "Working", variant: "default", Icon: Loader2, spin: true },
+  COMPLETED: { label: "Done", variant: "success", Icon: CheckCircle2 },
   COMPLETED_WITH_ERRORS: {
-    label: "Completed with errors",
+    label: "Done, some failed",
     variant: "warning",
     Icon: AlertTriangle,
   },
@@ -29,26 +29,31 @@ export function BatchStatusBadge({ status }: { status: BatchStatus }) {
   const { label, variant, Icon, spin } = BATCH_PRESENTATION[status];
   return (
     <Badge variant={variant}>
-      <Icon aria-hidden="true" className={spin ? "size-3 animate-spin" : "size-3"} />
+      <Icon aria-hidden="true" className={spin ? "animate-spin" : undefined} />
       {label}
     </Badge>
   );
 }
 
+/*
+ * Pipeline stage names as a clerk would say them. The keys are the server's
+ * enum and are untouched; only the words a human reads have changed, because
+ * "Normalising" and "OCR" describe the code rather than the work.
+ */
 const DOCUMENT_PRESENTATION: Record<
   DocumentStatus,
   { label: string; variant: BadgeProps["variant"] }
 > = {
-  QUEUED: { label: "Queued", variant: "outline" },
-  INGESTED: { label: "Ingested", variant: "outline" },
-  NORMALIZING: { label: "Normalising", variant: "default" },
-  SPLITTING: { label: "Splitting", variant: "default" },
+  QUEUED: { label: "Waiting", variant: "outline" },
+  INGESTED: { label: "Received", variant: "outline" },
+  NORMALIZING: { label: "Preparing", variant: "default" },
+  SPLITTING: { label: "Separating pages", variant: "default" },
   EXTRACTING_TEXT: { label: "Reading text", variant: "default" },
-  OCR: { label: "OCR", variant: "default" },
-  CLASSIFYING: { label: "Classifying", variant: "default" },
-  EXTRACTING_FIELDS: { label: "Extracting", variant: "default" },
-  VALIDATING: { label: "Validating", variant: "default" },
-  COMPLETED: { label: "Completed", variant: "success" },
+  OCR: { label: "Reading scan", variant: "default" },
+  CLASSIFYING: { label: "Finding type", variant: "default" },
+  EXTRACTING_FIELDS: { label: "Reading fields", variant: "default" },
+  VALIDATING: { label: "Checking", variant: "default" },
+  COMPLETED: { label: "Done", variant: "success" },
   FAILED: { label: "Failed", variant: "danger" },
   DUPLICATE: { label: "Duplicate", variant: "warning" },
   SKIPPED: { label: "Archive", variant: "outline" },

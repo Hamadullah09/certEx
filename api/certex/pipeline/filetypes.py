@@ -39,6 +39,7 @@ __all__ = [
     "FileKind",
     "detect_file_kind",
     "detect_mime",
+    "kind_for_mime",
     "libmagic_available",
     "refine_zip_from_path",
     "require_supported",
@@ -339,3 +340,8 @@ def require_supported(detected: DetectedType, *, filename: str | None = None) ->
             "extension will not change this result."
         ),
     )
+
+
+def kind_for_mime(mime: str) -> FileKind:
+    """The processing kind for a MIME type already sniffed and stored at ingest."""
+    return _MIME_TO_KIND.get(mime, FileKind.UNSUPPORTED)

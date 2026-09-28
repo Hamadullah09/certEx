@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 import uuid
 from typing import ClassVar, TypeAlias
 
@@ -72,9 +73,28 @@ class Base(DeclarativeBase):
         return f"<{type(self).__name__} id={identifier}>"
 
 
+_CLOCK_LOCK = threading.Lock()
+_last_timestamp = dt.datetime.min.replace(tzinfo=dt.UTC)
+_TICK = dt.timedelta(microseconds=1)
+
+
 def utcnow() -> dt.datetime:
-    """Timezone-aware current time. Used as a Python-side default."""
-    return dt.datetime.now(dt.UTC)
+    """Timezone-aware current time, strictly increasing within this process.
+
+    Used as the Python-side default for ``created_at``. "Newest first" lists and
+    keyset cursors order on it, and on Windows the system clock advances in
+    ~15 ms steps: thousands of consecutive calls return the same value, so rows
+    inserted in quick succession tied and came back in random order. Nudging a
+    repeated reading forward by one microsecond keeps insertion order without
+    moving any timestamp by a perceptible amount.
+    """
+    global _last_timestamp
+    now = dt.datetime.now(dt.UTC)
+    with _CLOCK_LOCK:
+        if now <= _last_timestamp:
+            now = _last_timestamp + _TICK
+        _last_timestamp = now
+    return now
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:

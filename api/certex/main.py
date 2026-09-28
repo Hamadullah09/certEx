@@ -19,7 +19,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from certex import __version__
 from certex.api.v1 import auth as auth_routes
 from certex.api.v1 import batches as batch_routes
+from certex.api.v1 import exports as export_routes
 from certex.api.v1 import health as health_routes
+from certex.api.v1 import progress as progress_routes
+from certex.api.v1 import rows as row_routes
+from certex.api.v1 import units as unit_routes
 from certex.config import Settings, get_settings
 from certex.core.errors import (
     AppError,
@@ -63,12 +67,7 @@ carrying a stable `code` and a `remediation` sentence.
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     settings: Settings = get_settings()
     configure_logging(settings)
-    logger.info(
-        "api.startup",
-        model=settings.llm_model,
-        provider=settings.llm_provider.value,
-        status=settings.app_env.value,
-    )
+    logger.info("api.startup", status=settings.app_env.value)
     try:
         yield
     finally:
@@ -213,6 +212,10 @@ def _register_routes(application: FastAPI) -> None:
     application.include_router(health_routes.router, prefix=f"{API_V1_PREFIX}/health")
     application.include_router(auth_routes.router, prefix=API_V1_PREFIX)
     application.include_router(batch_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(unit_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(row_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(progress_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(export_routes.router, prefix=API_V1_PREFIX)
 
 
 app = create_app()

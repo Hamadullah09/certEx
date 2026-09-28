@@ -5,10 +5,9 @@
 # parts - Tesseract, LibreOffice, the wheel set - are built and cached exactly
 # once. The targets differ only in what they add on top and how they start:
 #
-#   --target api     FastAPI behind Gunicorn. No PaddleOCR.
-#   --target worker  Celery. Adds PaddleOCR and pre-warms its model cache so the
-#                    first scanned page does not block on a model download, and
-#                    so the container works with no outbound network at all.
+#   --target api     FastAPI behind Gunicorn.
+#   --target worker  Celery. Tesseract (eng, urd, osd) is already in the base
+#                    layer, so OCR works with no outbound network at all.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -25,9 +24,7 @@ ENV PYTHONUNBUFFERED=1 \
 #   tesseract-ocr(+eng,+urd)  primary OCR engine and its language data
 #   libreoffice-writer        headless legacy .doc -> .docx conversion
 #   libmagic1                 content-based MIME sniffing (python-magic)
-#   libglib2.0-0, libgl1      required by OpenCV. The API uses the headless
-#                             build, but PaddleOCR depends on the full
-#                             opencv-contrib-python, which links libGL.
+#   libglib2.0-0, libgl1      shared libraries OpenCV's wheels load at import.
 #   fonts-noto-core           glyph coverage for rasterised pages, including
 #                             NotoNastaliqUrdu for Urdu text in the review pane
 #                             (there is no separate fonts-noto-nastaliq-urdu
@@ -36,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-urd \
+        tesseract-ocr-osd \
         libtesseract5 \
         libreoffice-writer \
         libreoffice-core \
@@ -54,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN tesseract --version \
     && tesseract --list-langs 2>&1 | grep -qx eng \
     && tesseract --list-langs 2>&1 | grep -qx urd \
+    && tesseract --list-langs 2>&1 | grep -qx osd \
     && soffice --version
 
 RUN groupadd --gid 10001 certex \
@@ -102,27 +101,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-api.sh"]
 
 # -----------------------------------------------------------------------------
-FROM python-deps AS worker-deps
-# -----------------------------------------------------------------------------
-# PaddleOCR is the secondary engine for low-confidence and rotated scans. It is
-# installed only in the worker because the wheel is large and the API never OCRs.
-RUN python -m pip install -e "/app/api[paddle]"
-
-# Pre-download the detection, recognition and angle-classification models into
-# the image. Without this the first OCR fallback at runtime would reach out to
-# the internet, which a locked-down deployment will not permit.
-ENV PADDLE_HOME=/opt/paddle \
-    HOME=/opt/paddle
-RUN mkdir -p /opt/paddle \
-    && python -c "\
-from paddleocr import PaddleOCR;\
-PaddleOCR(use_angle_cls=True, lang='en', show_log=False);\
-PaddleOCR(use_angle_cls=True, lang='ar', show_log=False);\
-print('paddleocr models cached')" \
-    && chown -R certex:certex /opt/paddle
-
-# -----------------------------------------------------------------------------
-FROM worker-deps AS worker
+FROM python-deps AS worker
 # -----------------------------------------------------------------------------
 ARG INSTALL_DEV=false
 RUN if [ "$INSTALL_DEV" = "true" ]; then python -m pip install -e "/app/api[dev]"; fi
@@ -139,7 +118,6 @@ RUN chmod +x /usr/local/bin/entrypoint-worker.sh /usr/local/bin/healthcheck-work
     && chown -R certex:certex /app
 
 USER certex
-ENV HOME=/opt/paddle
 
 # Health depends on WORKER_ROLE: a worker answers a ping addressed to its own
 # node name, while beat proves it can still publish to the broker.

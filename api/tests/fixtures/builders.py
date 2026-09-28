@@ -32,7 +32,9 @@ __all__ = [
     "build_docx",
     "build_encrypted_pdf",
     "build_image",
+    "build_large_pdf",
     "build_multi_certificate_pdf",
+    "build_permissions_only_pdf",
     "build_text_pdf",
     "build_zero_page_pdf",
     "build_zip",
@@ -282,6 +284,49 @@ def build_encrypted_pdf(path: Path, *, password: str = "letmein") -> Path:  # no
     writer.encrypt(user_password=password, owner_password=password)
     with path.open("wb") as handle:
         writer.write(handle)
+    return path
+
+
+def build_permissions_only_pdf(path: Path) -> Path:
+    """Encrypted with an empty user password: anyone can open it, but it is encrypted.
+
+    Common in the wild - systems that only want to restrict printing or copying.
+    """
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    _draw_certificate(pdf, SAMPLES_BY_KEY["death_karachi"])
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    writer = PdfWriter(clone_from=PdfReader(buffer))
+    writer.encrypt(user_password="", owner_password="owner-only-secret")
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def build_large_pdf(path: Path, *, megabytes: int = 18) -> Path:
+    """A genuinely large, valid PDF: a certificate page plus an incompressible image.
+
+    Random pixels do not compress, so the file's size tracks the image's raw size.
+    Used to exercise multi-part resumable uploads with real PDF bytes.
+    """
+    import numpy as np
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    side = int((megabytes * 1024 * 1024 / 3) ** 0.5)
+    noise = np.random.default_rng(seed=7).integers(0, 256, size=(side, side, 3), dtype=np.uint8)
+    image = Image.fromarray(noise, mode="RGB")
+
+    pdf = canvas.Canvas(str(path), pagesize=A4)
+    _draw_certificate(pdf, SAMPLES_BY_KEY["birth_lahore"])
+    pdf.showPage()
+    width, height = A4
+    pdf.drawImage(ImageReader(image), 0, 0, width=width, height=height)
+    pdf.showPage()
+    pdf.save()
     return path
 
 

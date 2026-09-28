@@ -22,7 +22,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 __all__ = [
     "AppEnv",
-    "LLMProvider",
     "LogFormat",
     "S3ServerSideEncryption",
     "Settings",
@@ -42,12 +41,6 @@ class AppEnv(str, enum.Enum):
 class LogFormat(str, enum.Enum):
     JSON = "json"
     CONSOLE = "console"
-
-
-class LLMProvider(str, enum.Enum):
-    ANTHROPIC = "anthropic"
-    OPENAI = "openai"
-    LOCAL = "local"
 
 
 class S3ServerSideEncryption(str, enum.Enum):
@@ -131,6 +124,7 @@ class Settings(BaseSettings):
     max_batch_files: int = Field(default=2_000, ge=1)
     max_batch_bytes: int = Field(default=5_368_709_120, ge=1)
     upload_chunk_bytes: int = Field(default=8_388_608, ge=4096)
+    upload_session_ttl_hours: int = Field(default=48, ge=1)
     max_zip_depth: int = Field(default=2, ge=0, le=8)
     max_zip_ratio: int = Field(default=120, ge=2)
     max_zip_uncompressed_bytes: int = Field(default=2_147_483_648, ge=1)
@@ -144,8 +138,23 @@ class Settings(BaseSettings):
     text_quality_min_dict_ratio: Probability = 0.35
     ocr_upscale_factor: float = Field(default=2.0, ge=1.0, le=8.0)
     ocr_upscale_width_threshold: int = Field(default=1200, ge=0)
-    ocr_paddle_enabled: bool = True
+    ocr_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "Deadline for one Tesseract run. Enforced in code because Celery's task "
+            "time limits are not available on every platform the worker runs on."
+        ),
+    )
+    ocr_cache_enabled: bool = True
     tesseract_cmd: str | None = None
+    tessdata_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Directory holding *.traineddata. Unset means Tesseract's own default, "
+            "which is correct in the container image."
+        ),
+    )
     soffice_cmd: str = "soffice"
     use_libmagic: bool | None = Field(
         default=None,
@@ -156,23 +165,14 @@ class Settings(BaseSettings):
         ),
     )
 
-    # -- LLM ------------------------------------------------------------------
-    llm_enabled: bool = True
-    llm_provider: LLMProvider = LLMProvider.ANTHROPIC
-    llm_model: str = "claude-sonnet-4-5"
-    llm_api_key: SecretStr | None = None
-    llm_base_url: str | None = None
-    llm_max_tokens: int = Field(default=4096, ge=256)
-    llm_timeout_seconds: float = Field(default=90.0, gt=0)
-    llm_max_retries: int = Field(default=5, ge=0)
-    llm_trigger_confidence: Probability = 0.75
-    llm_cache_enabled: bool = True
-    llm_cache_ttl_seconds: int = Field(default=2_592_000, ge=0)
-    llm_allow_vision: bool = False
-    llm_max_chars_per_call: int = Field(default=24_000, ge=1000)
-
     # -- Confidence thresholds ------------------------------------------------
-    confidence_auto_approve: Probability = 0.90
+    confidence_auto_approve: Probability = 1.00
+    """Row confidence at which a row is exported without anyone looking at it.
+
+    The default of 1.00 means nobody is skipped: an automated reading is capped below
+    1.0, so no row can clear it. An office that would rather spend its review time on
+    the doubtful rows can lower this - 0.90 is the specification's suggestion."""
+
     confidence_review_floor: Probability = 0.60
 
     # -- Retention ------------------------------------------------------------
@@ -241,13 +241,19 @@ class Settings(BaseSettings):
     @field_validator(
         "cookie_domain",
         "s3_sse_kms_key_id",
-        "llm_base_url",
         "tesseract_cmd",
+        "tessdata_prefix",
+        "use_libmagic",
         mode="before",
     )
     @classmethod
     def _empty_string_to_none(cls, value: object) -> object:
-        """Treat an empty env var the same as an unset one."""
+        """Treat an empty env var the same as an unset one.
+
+        ``use_libmagic`` needs this most: it is ``bool | None``, and ``.env.example``
+        ships it blank to mean "auto-detect", which pydantic would otherwise reject
+        as an unparseable boolean and refuse to boot.
+        """
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -255,13 +261,6 @@ class Settings(BaseSettings):
     @field_validator("s3_endpoint_url", mode="before")
     @classmethod
     def _blank_endpoint_means_real_aws(cls, value: object) -> object:
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
-    @field_validator("llm_api_key", mode="before")
-    @classmethod
-    def _blank_key_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -284,8 +283,6 @@ class Settings(BaseSettings):
             raise ValueError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true")
         if self.s3_sse is S3ServerSideEncryption.AWS_KMS and not self.s3_sse_kms_key_id:
             raise ValueError("S3_SSE=aws:kms requires S3_SSE_KMS_KEY_ID")
-        if self.llm_provider is LLMProvider.LOCAL and not self.llm_base_url:
-            raise ValueError("LLM_PROVIDER=local requires LLM_BASE_URL")
 
         if self.app_env is AppEnv.PRODUCTION:
             secret = self.secret_key.get_secret_value()

@@ -11,10 +11,16 @@ export interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
   tone?: "default" | "success" | "warning" | "danger";
 }
 
+/*
+ * Each tone clears 3:1 against the track, which is what WCAG 1.4.11 asks of a
+ * graphical object you have to be able to read. The tones point at the semantic
+ * fills rather than at the confidence ramp's ink colours, which is what they
+ * used to borrow.
+ */
 const TONE_CLASS: Record<NonNullable<ProgressProps["tone"]>, string> = {
   default: "bg-primary",
-  success: "bg-confidence-high-foreground",
-  warning: "bg-confidence-medium-foreground",
+  success: "bg-success",
+  warning: "bg-warning",
   danger: "bg-destructive",
 };
 
@@ -36,7 +42,13 @@ const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
         aria-valuemax={100}
         aria-valuenow={Math.round(clamped)}
         aria-label={label}
-        className={cn("h-2 w-full overflow-hidden rounded-full bg-secondary", className)}
+        className={cn(
+          // The inset hairline keeps an empty track visible; a tint alone
+          // disappears against a white card at 0%.
+          "h-3 w-full overflow-hidden rounded-full bg-secondary",
+          "shadow-[inset_0_0_0_1px_var(--border-subtle)]",
+          className,
+        )}
         {...props}
       >
         <div

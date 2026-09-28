@@ -40,13 +40,19 @@ export type DocumentStatus = z.infer<typeof documentStatusSchema>;
 export const certificateTypeSchema = z.enum(["BIRTH", "MARRIAGE", "DEATH", "OTHER"]);
 export type CertificateType = z.infer<typeof certificateTypeSchema>;
 
+/** What a clerk calls each type, for filters, grid cells and download bars. */
+export const CERTIFICATE_TYPE_LABEL: Record<CertificateType, string> = {
+  BIRTH: "Birth",
+  MARRIAGE: "Marriage",
+  DEATH: "Death",
+  OTHER: "Other",
+};
+
 export const batchSettingsSchema = z.object({
   expected_types: z.array(certificateTypeSchema).nullish(),
   ocr_languages: z.string().nullish(),
   confidence_auto_approve: z.number().min(0).max(1).nullish(),
   confidence_review_floor: z.number().min(0).max(1).nullish(),
-  llm_enabled: z.boolean().nullish(),
-  allow_vision: z.boolean().default(false),
 });
 export type BatchSettings = z.infer<typeof batchSettingsSchema>;
 
@@ -83,11 +89,15 @@ export const documentSummarySchema = z.object({
   status: documentStatusSchema,
   error_code: z.string().nullish(),
   error_message: z.string().nullish(),
+  remediation: z.string().nullish(),
   is_duplicate_of: z.string().uuid().nullish(),
   parent_document_id: z.string().uuid().nullish(),
   archive_member_path: z.string().nullish(),
   is_encrypted: z.boolean().default(false),
+  processing_started_at: z.string().nullish(),
+  processing_completed_at: z.string().nullish(),
   created_at: z.string(),
+  updated_at: z.string().nullish(),
 });
 export type DocumentSummary = z.infer<typeof documentSummarySchema>;
 
@@ -103,6 +113,9 @@ export type UploadedFile = {
   duplicate_of?: string | null;
   extracted_from_archive: boolean;
   children: UploadedFile[];
+  error_code?: string | null;
+  error_message?: string | null;
+  remediation?: string | null;
 };
 
 export const uploadedFileSchema: z.ZodType<UploadedFile, z.ZodTypeDef, unknown> = z.lazy(() =>
@@ -117,8 +130,25 @@ export const uploadedFileSchema: z.ZodType<UploadedFile, z.ZodTypeDef, unknown> 
     duplicate_of: z.string().uuid().nullish(),
     extracted_from_archive: z.boolean().default(false),
     children: z.array(uploadedFileSchema).default([]),
+    error_code: z.string().nullish(),
+    error_message: z.string().nullish(),
+    remediation: z.string().nullish(),
   }),
 );
+
+/** Where a resumable upload stands; resume by sending the chunk at `received_bytes`. */
+export const uploadSessionStateSchema = z.object({
+  upload_id: z.string().uuid(),
+  client_file_id: z.string(),
+  filename: z.string(),
+  declared_size: z.number().int(),
+  received_bytes: z.number().int(),
+  chunk_size: z.number().int().positive(),
+  is_complete: z.boolean(),
+  document_id: z.string().uuid().nullish(),
+  expires_at: z.string(),
+});
+export type UploadSessionState = z.infer<typeof uploadSessionStateSchema>;
 
 export const pageMetaSchema = z.object({
   next_cursor: z.string().nullish(),

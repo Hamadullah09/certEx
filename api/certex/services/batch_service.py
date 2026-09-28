@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from certex.core.deps import WorkspaceScope
 from certex.core.errors import ConflictError, NotFoundError
 from certex.db.base import JSONDict
-from certex.db.models import Batch, Document
+from certex.db.models import Batch, Document, UploadSession
 from certex.enums import BatchStatus, DocumentStatus, UserRole
 from certex.logging_setup import get_logger
 from certex.schemas.batches import BatchCreateRequest, BatchSettings
@@ -34,6 +34,7 @@ __all__ = [
     "load_batch_settings",
     "mark_uploading",
     "refresh_counts",
+    "remove_document",
 ]
 
 logger = get_logger(__name__)
@@ -50,20 +51,19 @@ class DeletionSummary:
 
 
 def _settings_to_json(settings: BatchSettings) -> JSONDict:
-    """Serialise batch settings for storage.
-
-    ``password`` is excluded from the model dump by its field definition, so a
-    document password supplied for an encrypted PDF is used for this request and
-    never persisted.
-    """
-    payload = settings.model_dump(mode="json", exclude_none=True)
-    payload.pop("password", None)
-    return dict(payload)
+    """Serialise batch settings for storage, keeping only what the user chose."""
+    return dict(settings.model_dump(mode="json", exclude_none=True))
 
 
 def load_batch_settings(batch: Batch) -> BatchSettings:
-    """Parse a batch's stored settings, tolerating rows written by older versions."""
-    raw = batch.settings_json or {}
+    """Parse a batch's stored settings, tolerating rows written by older versions.
+
+    Keys this version no longer knows - the retired ``llm_enabled`` and
+    ``allow_vision`` switches, for example - are dropped rather than failing the
+    whole settings object, which would silently reset the thresholds too.
+    """
+    stored = batch.settings_json or {}
+    raw = {key: value for key, value in stored.items() if key in BatchSettings.model_fields}
     try:
         return BatchSettings.model_validate(raw)
     except ValueError:
@@ -179,6 +179,23 @@ async def list_batches(
     return rows, next_cursor, total
 
 
+async def get_document(
+    session: AsyncSession, *, scope: WorkspaceScope, document_id: uuid.UUID
+) -> Document:
+    """One file of this workspace, or a 404 that does not admit it exists elsewhere."""
+    document = await session.scalar(
+        select(Document).where(
+            Document.id == document_id, Document.workspace_id == scope.workspace_id
+        )
+    )
+    if document is None:
+        raise NotFoundError(
+            "No such file in this workspace.",
+            remediation="Refresh the batch to see which files it holds.",
+        )
+    return document
+
+
 async def list_batch_documents(
     session: AsyncSession,
     *,
@@ -253,6 +270,14 @@ async def delete_batch(
 
     store = storage or get_object_storage()
 
+    # Unfinished resumable uploads hold parts that no bucket listing shows; abort
+    # them first so no fragment of a document outlives the batch.
+    for upload in (
+        await session.scalars(select(UploadSession).where(UploadSession.batch_id == batch_id))
+    ).all():
+        if upload.multipart_upload_id:
+            store.abort_multipart_upload(upload.storage_key, upload_id=upload.multipart_upload_id)
+
     document_count = await session.scalar(
         select(func.count()).select_from(Document).where(Document.batch_id == batch_id)
     )
@@ -305,6 +330,80 @@ async def delete_batch(
         documents_deleted=int(document_count or 0),
         objects_deleted=objects_deleted,
     )
+
+
+async def remove_document(
+    session: AsyncSession,
+    *,
+    scope: WorkspaceScope,
+    batch_id: uuid.UUID,
+    document_id: uuid.UUID,
+    storage: ObjectStorage | None = None,
+) -> int:
+    """Take a file back out of a batch that has not started processing.
+
+    Used to discard a rejected upload before retrying it - an encrypted PDF sent
+    without its password, say - so the batch does not carry a stale failure next
+    to the good copy. Removing an archive removes what was unpacked from it.
+    Returns how many document rows went.
+    """
+    scope.require(UserRole.OPERATOR)
+    batch = await get_batch(session, scope=scope, batch_id=batch_id)
+    if batch.status not in (BatchStatus.CREATED, BatchStatus.UPLOADING):
+        raise ConflictError(
+            "Files cannot be removed once a batch has started processing.",
+            title="Batch already started",
+            remediation="Correct the affected rows on the results page instead.",
+        )
+
+    document = await session.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.batch_id == batch_id,
+            Document.workspace_id == scope.workspace_id,
+        )
+    )
+    if document is None:
+        raise NotFoundError(
+            "No file with that id exists in this batch.",
+            remediation="Refresh the file list to see what the batch holds.",
+        )
+
+    # The document and everything unpacked beneath it, breadth first. Archive depth
+    # is bounded by MAX_ZIP_DEPTH, so this terminates in a couple of rounds.
+    doomed: list[Document] = [document]
+    frontier = [document.id]
+    while frontier:
+        children = (
+            await session.scalars(select(Document).where(Document.parent_document_id.in_(frontier)))
+        ).all()
+        doomed.extend(children)
+        frontier = [child.id for child in children]
+    doomed_ids = {item.id for item in doomed}
+
+    store = storage or get_object_storage()
+    for item in doomed:
+        if not item.storage_key or item.is_duplicate_of is not None:
+            continue
+        shared = await session.scalar(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.storage_key == item.storage_key, Document.id.not_in(doomed_ids))
+        )
+        if not shared:
+            store.delete(item.storage_key)
+
+    await session.delete(document)
+    await session.flush()
+    await refresh_counts(session, batch)
+
+    logger.info(
+        "batch.document_removed",
+        batch_id=str(batch_id),
+        document_id=str(document_id),
+        count=len(doomed),
+    )
+    return len(doomed)
 
 
 async def refresh_counts(session: AsyncSession, batch: Batch) -> Batch:

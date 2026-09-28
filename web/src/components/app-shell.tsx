@@ -3,15 +3,15 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FileStack, LogOut, Moon, Sun } from "lucide-react";
+import { FileStack, LayoutTemplate, LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLogout, useSession } from "@/hooks/use-session";
+import { cn } from "@/lib/utils";
 
 const appName = process.env.NEXT_PUBLIC_APP_NAME ?? "CertExtract";
-const llmLabel = process.env.NEXT_PUBLIC_LLM_PROVIDER_LABEL;
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -24,7 +24,7 @@ function ThemeToggle() {
   const isDark = resolvedTheme === "dark";
   return (
     <Button
-      variant="ghost"
+      variant="outline"
       size="icon"
       aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
       onClick={() => setTheme(isDark ? "light" : "dark")}
@@ -36,7 +36,8 @@ function ThemeToggle() {
           <Moon aria-hidden="true" />
         )
       ) : (
-        <span className="size-4" />
+        // Holds the icon's box before hydration so the header does not shift.
+        <span className="size-5" />
       )}
     </Button>
   );
@@ -48,7 +49,14 @@ function ThemeToggle() {
  * The guard is a convenience, not a control - every endpoint enforces its own
  * authorisation server-side, so hiding UI is never what keeps data safe.
  */
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  wide = false,
+}: {
+  children: React.ReactNode;
+  /** The review grid needs the whole monitor; every other page reads better narrow. */
+  wide?: boolean;
+}) {
   const router = useRouter();
   const { data: session, isPending } = useSession();
   const logout = useLogout();
@@ -59,34 +67,65 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!session) {
     return (
-      <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-10">
-        <Skeleton className="h-8 w-56" />
-        <Skeleton className="h-4 w-80" />
-        <Skeleton className="h-64 w-full" />
+      <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-12 sm:px-6">
+        <Skeleton className="h-14 w-14 rounded-xl" />
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-6 w-96" />
+        <Skeleton className="h-72 w-full rounded-xl" />
       </div>
     );
   }
 
   return (
     <div className="min-h-dvh">
-      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-3">
-          <Link href="/" className="flex items-center gap-2 rounded-md font-semibold">
-            <FileStack aria-hidden="true" className="size-5 text-primary" />
+      <header className="sticky top-0 z-30 border-b-2 border-border bg-background/92 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
+          <Link
+            href="/"
+            className="flex items-center gap-3 rounded-lg text-xl font-bold tracking-tight text-foreground"
+          >
+            <span
+              aria-hidden="true"
+              className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-soft"
+            >
+              <FileStack className="size-6" />
+            </span>
             <span>{appName}</span>
           </Link>
 
-          <div className="flex items-center gap-2">
+          {/* Plain words, and links rather than icons alone: the three places this
+              app goes have to be readable at a glance from across a desk. */}
+          <nav aria-label="Main" className="order-3 flex items-center gap-1 sm:order-none">
+            {[
+              { href: "/", label: "Batches", Icon: FileStack },
+              { href: "/templates", label: "Templates", Icon: LayoutTemplate },
+              { href: "/settings", label: "Settings", Icon: Settings },
+            ].map(({ href, label, Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="flex min-h-11 items-center gap-2 rounded-lg px-3 text-base font-semibold text-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                <Icon aria-hidden="true" className="size-5" />
+                {label}
+              </Link>
+            ))}
+          </nav>
+
+          <div className="flex items-center gap-3">
+            {/* Which workspace and which account - the two facts an operator
+                double-checks before uploading someone's records. */}
             <div className="hidden min-w-0 text-right sm:block">
-              <p className="truncate text-sm font-medium">{session.workspace.name}</p>
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="truncate text-base font-semibold text-foreground">
+                {session.workspace.name}
+              </p>
+              <p className="truncate text-sm text-muted-foreground">
                 {session.user.email} · {session.user.role.toLowerCase()}
               </p>
             </div>
             <ThemeToggle />
             <Button
               variant="outline"
-              size="sm"
               onClick={() => logout.mutate()}
               disabled={logout.isPending}
             >
@@ -97,20 +136,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main id="main" className="mx-auto w-full max-w-6xl px-4 py-8">
+      <main
+        id="main"
+        className={cn(
+          "mx-auto w-full px-4 py-10 sm:px-6 sm:py-12",
+          wide ? "max-w-[112rem]" : "max-w-6xl",
+        )}
+      >
         {children}
       </main>
-
-      {llmLabel ? (
-        <footer className="mx-auto w-full max-w-6xl px-4 pb-8">
-          {/* Section 11: if the language model is external, say so in the UI. */}
-          <p className="text-xs text-muted-foreground">
-            Field extraction may send certificate text to {llmLabel} when rules cannot
-            read a field. Disable the LLM fallback per batch or in settings to keep all
-            processing local.
-          </p>
-        </footer>
-      ) : null}
     </div>
   );
 }

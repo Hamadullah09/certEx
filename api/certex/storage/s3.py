@@ -51,7 +51,9 @@ class StorageKeys:
     """Key layout. Every segment is a UUID, a date or a fixed literal.
 
     ``documents/<workspace>/<yyyy>/<mm>/<document-id>``
-    ``pages/<workspace>/<document-id>/<page-number>.png``
+    ``uploads/<workspace>/<upload-session-id>``            (in-flight resumable upload)
+    ``pages/<workspace>/<document-id>/<page-number>.jpg``  (review-pane page image)
+    ``cache/ocr/<workspace>/<sha256>.json``                (OCR result by page hash)
     ``exports/<workspace>/<export-id>.<ext>``
     """
 
@@ -60,8 +62,18 @@ class StorageKeys:
         return f"documents/{workspace_id}/{year:04d}/{month:02d}/{document_id}"
 
     @staticmethod
+    def upload(workspace_id: uuid.UUID, upload_id: uuid.UUID) -> str:
+        return f"uploads/{workspace_id}/{upload_id}"
+
+    @staticmethod
     def page_image(workspace_id: uuid.UUID, document_id: uuid.UUID, page_number: int) -> str:
-        return f"pages/{workspace_id}/{document_id}/{page_number:05d}.png"
+        return f"pages/{workspace_id}/{document_id}/{page_number:05d}.jpg"
+
+    @staticmethod
+    def ocr_cache(workspace_id: uuid.UUID, digest: str) -> str:
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError("OCR cache keys are lowercase SHA-256 hex digests")
+        return f"cache/ocr/{workspace_id}/{digest}.json"
 
     @staticmethod
     def export(workspace_id: uuid.UUID, export_id: uuid.UUID, extension: str) -> str:
@@ -315,6 +327,135 @@ class ObjectStorage:
         except (BotoCoreError, ClientError) as exc:
             raise StorageUnavailableError(f"Could not write to storage: {safe_error(exc)}") from exc
 
+    def get_bytes_if_exists(self, key: str) -> bytes | None:
+        """Read a small object whole, or None when it does not exist.
+
+        For cache entries and page images only - both bounded in size. Documents
+        are always streamed.
+        """
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                return None
+            raise StorageUnavailableError(
+                f"Could not read from storage: {safe_error(exc)}"
+            ) from exc
+        except BotoCoreError as exc:
+            raise StorageUnavailableError(
+                f"Could not read from storage: {safe_error(exc)}"
+            ) from exc
+        body = response["Body"]
+        try:
+            return body.read()
+        finally:
+            body.close()
+
+    # ------------------------------------------------------ multipart uploads
+    def create_multipart_upload(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        """Begin a server-side multipart upload and return its upload id.
+
+        Encryption is declared here, at creation: S3 applies it to every part and
+        to the assembled object, so parts never need to repeat it.
+        """
+        try:
+            response = self.client.create_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                ContentType=content_type,
+                Metadata=metadata or {},
+                **self.encryption_args(),  # type: ignore[arg-type]
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError(
+                f"Could not start the upload in storage: {safe_error(exc)}"
+            ) from exc
+        return str(response["UploadId"])
+
+    def upload_part(self, key: str, *, upload_id: str, part_number: int, payload: bytes) -> str:
+        """Send one part. Returns the ETag needed to complete the upload."""
+        try:
+            response = self.client.upload_part(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+                PartNumber=part_number,
+                Body=payload,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError(
+                f"Could not store part {part_number} of the upload: {safe_error(exc)}"
+            ) from exc
+        return str(response["ETag"])
+
+    def complete_multipart_upload(
+        self, key: str, *, upload_id: str, parts: list[tuple[int, str]]
+    ) -> None:
+        """Assemble the uploaded parts, in part-number order, into one object."""
+        ordered = sorted(parts, key=lambda part: part[0])
+        try:
+            self.client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={
+                    "Parts": [{"PartNumber": number, "ETag": etag} for number, etag in ordered]
+                },
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError(
+                f"Could not assemble the uploaded file: {safe_error(exc)}"
+            ) from exc
+
+    def abort_multipart_upload(self, key: str, *, upload_id: str) -> None:
+        """Discard an unfinished upload and every part already sent.
+
+        A missing upload is not an error: aborting is the cleanup path, and it may
+        run twice or after the storage side has already expired the upload.
+        """
+        try:
+            self.client.abort_multipart_upload(Bucket=self.bucket, Key=key, UploadId=upload_id)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchUpload", "404"):
+                return
+            logger.warning("storage.abort_failed", storage_key=key, error_type=safe_error(exc))
+        except BotoCoreError as exc:
+            logger.warning("storage.abort_failed", storage_key=key, error_type=safe_error(exc))
+
+    def copy_object(
+        self,
+        source_key: str,
+        destination_key: str,
+        *,
+        content_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        """Server-side copy, re-encrypted and with replaced metadata.
+
+        Moving a finished upload to its document key this way costs no bandwidth:
+        the bytes never leave the storage service.
+        """
+        try:
+            self.client.copy_object(
+                Bucket=self.bucket,
+                Key=destination_key,
+                CopySource={"Bucket": self.bucket, "Key": source_key},
+                ContentType=content_type,
+                Metadata=metadata or {},
+                MetadataDirective="REPLACE",
+                **self.encryption_args(),  # type: ignore[arg-type]
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError(
+                f"Could not move the uploaded file into place: {safe_error(exc)}"
+            ) from exc
+
     def download_stream(self, key: str) -> StreamingBody:
         """Open an object for reading. The caller must close the returned body."""
         try:
@@ -334,14 +475,30 @@ class ObjectStorage:
         return response["Body"]
 
     def download_to_path(self, key: str, destination: Path) -> Path:
-        """Download an object to a local path, streaming in constant memory."""
+        """Download an object to a local path, streaming in constant memory.
+
+        A missing object raises :class:`NotFoundError` - permanent, never worth a
+        retry - while every other failure raises :class:`StorageUnavailableError`.
+        """
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             with destination.open("wb") as handle:
                 self.client.download_fileobj(
                     self.bucket, key, handle, Config=self._transfer_config()
                 )
-        except (BotoCoreError, ClientError) as exc:
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise NotFoundError(
+                    "The stored document is no longer available.",
+                    remediation=(
+                        "It may have been removed by the retention policy. "
+                        "Re-upload the file to process it again."
+                    ),
+                ) from exc
+            raise StorageUnavailableError(
+                f"Could not read the document from storage: {safe_error(exc)}"
+            ) from exc
+        except BotoCoreError as exc:
             raise StorageUnavailableError(
                 f"Could not read the document from storage: {safe_error(exc)}"
             ) from exc

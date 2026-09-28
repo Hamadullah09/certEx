@@ -62,23 +62,29 @@ export function UploadDropzone({ onDrop, disabled = false }: UploadDropzoneProps
         {...getRootProps()}
         aria-label="Drop certificates here, or activate to browse for files"
         className={cn(
-          "flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border px-6 py-12 text-center transition-colors",
-          isDragActive && !isDragReject && "border-primary bg-accent/50",
-          isDragReject && "border-destructive bg-confidence-low",
-          disabled && "cursor-not-allowed opacity-60",
+          "flex cursor-pointer flex-col items-center justify-center rounded-xl border-[3px] border-dashed px-6 py-14 text-center transition-colors",
+          // At rest the target is already tinted rather than an empty outline,
+          // so it reads as somewhere to put something.
+          "border-primary-border bg-primary-surface/50 hover:border-primary hover:bg-primary-surface",
+          isDragActive && !isDragReject && "border-primary bg-primary-surface",
+          isDragReject && "border-destructive bg-destructive-surface",
+          // Greyed out rather than faded: opacity would drag the label's
+          // contrast down at the moment it has to explain why nothing happens.
+          disabled &&
+            "cursor-not-allowed border-border bg-muted text-muted-foreground hover:border-border hover:bg-muted [&_svg]:text-muted-foreground",
         )}
       >
         <input {...getInputProps()} />
-        <UploadCloud aria-hidden="true" className="size-8 text-muted-foreground" />
-        <p className="mt-3 text-sm font-medium">
+        <UploadCloud aria-hidden="true" className="size-12 text-primary" />
+        <p className="mt-4 text-xl font-bold">
           {isDragActive ? "Drop the files to add them" : "Drag certificates here"}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1.5 text-base text-muted-foreground">
           PDF, Word, images or a ZIP — or click to browse
         </p>
       </div>
 
-      <div className="mt-3 flex justify-center">
+      <div className="mt-4 flex justify-center">
         <input
           ref={folderInputRef}
           type="file"
@@ -92,7 +98,6 @@ export function UploadDropzone({ onDrop, disabled = false }: UploadDropzoneProps
         <Button
           type="button"
           variant="outline"
-          size="sm"
           disabled={disabled}
           onClick={() => folderInputRef.current?.click()}
         >

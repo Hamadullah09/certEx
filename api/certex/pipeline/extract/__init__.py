@@ -1,1 +1,1 @@
-"""Field extraction layers: templates, rules, LLM fallback, merge policy."""
+"""Field extraction layers: templates, generic rules and the merge policy."""

@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from certex.core.errors import CorruptDocumentError, EncryptedDocumentError
-from certex.pipeline.pdfprobe import PdfProblem, probe_pdf, raise_for_probe
+from certex.pipeline.pdfprobe import PdfProblem, probe_pdf, raise_for_probe, remove_encryption
 from tests.fixtures.builders import (
     build_corrupt_pdf,
     build_encrypted_pdf,
     build_multi_certificate_pdf,
+    build_permissions_only_pdf,
     build_text_pdf,
     build_zero_page_pdf,
 )
@@ -113,3 +114,41 @@ class TestUnreadable:
             path = tmp_path / "x.pdf"
             path.write_bytes(payload)
             assert probe_pdf(path) is not None
+
+
+class TestRemoveEncryption:
+    """Ingest strips a PDF's own encryption once, so no later stage needs a password."""
+
+    def test_right_password_yields_an_unencrypted_readable_copy(self, tmp_path: Path) -> None:
+        source = build_encrypted_pdf(tmp_path / "locked.pdf", password="letmein")
+        copy = tmp_path / "open.pdf"
+        remove_encryption(source, copy, password="letmein")
+
+        probe = probe_pdf(copy)
+        assert probe.is_readable
+        assert not probe.is_encrypted
+        assert probe.page_count == 1
+
+    def test_wrong_password_is_rejected_without_writing(self, tmp_path: Path) -> None:
+        source = build_encrypted_pdf(tmp_path / "locked.pdf", password="letmein")
+        copy = tmp_path / "open.pdf"
+        with pytest.raises(EncryptedDocumentError):
+            remove_encryption(source, copy, password="wrong")
+        assert not copy.exists()
+
+    def test_permissions_only_encryption_needs_no_password(self, tmp_path: Path) -> None:
+        source = build_permissions_only_pdf(tmp_path / "restricted.pdf")
+        assert probe_pdf(source).is_encrypted
+
+        copy = tmp_path / "open.pdf"
+        remove_encryption(source, copy, password=None)
+        assert not probe_pdf(copy).is_encrypted
+
+    def test_text_survives_decryption(self, tmp_path: Path) -> None:
+        import fitz
+
+        source = build_encrypted_pdf(tmp_path / "locked.pdf", password="letmein")
+        copy = tmp_path / "open.pdf"
+        remove_encryption(source, copy, password="letmein")
+        with fitz.open(str(copy)) as document:
+            assert "Ayesha Noor Malik" in document.load_page(0).get_text()

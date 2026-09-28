@@ -43,7 +43,6 @@ class TestCreate:
                 "settings": {
                     "ocr_languages": "eng+urd",
                     "expected_types": ["BIRTH", "DEATH"],
-                    "llm_enabled": False,
                     "confidence_auto_approve": 0.95,
                 },
             },
@@ -51,21 +50,39 @@ class TestCreate:
         settings = response.json()["settings"]
         assert settings["ocr_languages"] == "eng+urd"
         assert settings["expected_types"] == ["BIRTH", "DEATH"]
-        assert settings["llm_enabled"] is False
         assert settings["confidence_auto_approve"] == 0.95
 
-    async def test_document_password_is_never_stored(
-        self, api_client: AsyncClient, db_session, operator_user: User
+    async def test_passwords_are_not_a_batch_setting(
+        self, api_client: AsyncClient, operator_user: User
     ) -> None:
-        """A password supplied to open encrypted PDFs must not persist."""
+        """Passwords travel with the file they open, never on the batch."""
         await authenticate(api_client, operator_user)
         response = await api_client.post(
             BATCHES,
             json={"name": "Locked scans", "settings": {"password": "super-secret-value"}},
         )
-        batch = await db_session.get(Batch, response.json()["id"])
-        assert "super-secret-value" not in str(batch.settings_json)
+        assert response.status_code == 422
         assert "super-secret-value" not in response.text
+
+    async def test_retired_settings_keys_are_tolerated(
+        self, api_client: AsyncClient, db_session, operator_user: User
+    ) -> None:
+        """Rows written before the LLM switches were retired still load their thresholds."""
+        await authenticate(api_client, operator_user)
+        created = await api_client.post(
+            BATCHES, json={"name": "Legacy", "settings": {"confidence_auto_approve": 0.93}}
+        )
+        batch = await db_session.get(Batch, created.json()["id"])
+        batch.settings_json = {
+            "confidence_auto_approve": 0.93,
+            "llm_enabled": True,
+            "allow_vision": False,
+        }
+        await db_session.flush()
+
+        response = await api_client.get(f"{BATCHES}/{batch.id}")
+        assert response.status_code == 200
+        assert response.json()["settings"]["confidence_auto_approve"] == 0.93
 
     async def test_viewer_cannot_create(self, api_client: AsyncClient, viewer_user: User) -> None:
         await authenticate(api_client, viewer_user)

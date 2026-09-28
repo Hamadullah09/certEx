@@ -25,3 +25,23 @@ target-version = "py311"
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
+# The pipeline code these tasks call lives in ../api; point mypy at it so the
+# worker can be checked on its own.
+mypy_path = "../api"
+# Celery's decorators and signal connectors are untyped, and every task and signal
+# handler in this package goes through one. The bodies are still checked strictly.
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship no type information.
+module = [
+  "celery.*",
+  "kombu.*",
+  "fitz.*",
+  "pdfplumber.*",
+  "docx.*",
+  "magic.*",
+  "cv2.*",
+  "pytesseract.*",
+]
+ignore_missing_imports = true

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from certex.config import AppEnv, LLMProvider, S3ServerSideEncryption, Settings
+from certex.config import AppEnv, S3ServerSideEncryption, Settings
 
 pytestmark = pytest.mark.unit
 
@@ -45,8 +45,13 @@ class TestParsing:
     def test_ocr_language_list(self) -> None:
         assert build(ocr_languages="eng+urd+ara").ocr_language_list == ["eng", "urd", "ara"]
 
-    def test_blank_llm_key_becomes_none(self) -> None:
-        assert build(llm_api_key="  ").llm_api_key is None
+    def test_blank_use_libmagic_means_autodetect(self) -> None:
+        """``.env.example`` ships ``USE_LIBMAGIC=`` blank; that must boot, not crash."""
+        assert build(use_libmagic="").use_libmagic is None
+        assert build(use_libmagic="false").use_libmagic is False
+
+    def test_blank_tessdata_prefix_becomes_none(self) -> None:
+        assert build(tessdata_prefix=" ").tessdata_prefix is None
 
 
 class TestCoherence:
@@ -75,16 +80,11 @@ class TestCoherence:
             build(s3_sse=S3ServerSideEncryption.AWS_KMS)
         assert build(s3_sse=S3ServerSideEncryption.AWS_KMS, s3_sse_kms_key_id="key-1")
 
-    def test_local_llm_requires_base_url(self) -> None:
-        with pytest.raises(ValidationError, match="LLM_BASE_URL"):
-            build(llm_provider=LLMProvider.LOCAL)
-        assert build(llm_provider=LLMProvider.LOCAL, llm_base_url="http://localhost:11434/v1")
-
     def test_probabilities_are_bounded(self) -> None:
         with pytest.raises(ValidationError):
             build(confidence_auto_approve=1.5)
         with pytest.raises(ValidationError):
-            build(llm_trigger_confidence=-0.1)
+            build(text_quality_min_dict_ratio=-0.1)
 
 
 class TestProductionGuards:
@@ -161,9 +161,9 @@ class TestEnvironmentSource:
     def test_numeric_and_bool_fields_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SECRET_KEY", STRONG_SECRET)
         monkeypatch.setenv("OCR_DPI", "400")
-        monkeypatch.setenv("LLM_ENABLED", "false")
+        monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
         monkeypatch.setenv("CONFIDENCE_AUTO_APPROVE", "0.85")
         settings = Settings(_env_file=None)  # type: ignore[call-arg]
         assert settings.ocr_dpi == 400
-        assert settings.llm_enabled is False
+        assert settings.rate_limit_enabled is False
         assert settings.confidence_auto_approve == 0.85

@@ -8,6 +8,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from certex.core.errors import remediation_for
 from certex.enums import BatchStatus, CertificateType, DocumentStatus
 from certex.pipeline.safety import sanitise_filename
 
@@ -17,7 +18,7 @@ __all__ = [
     "BatchSettings",
     "BatchSummary",
     "DocumentSummary",
-    "UploadChunkResult",
+    "UploadCompleteRequest",
     "UploadInit",
     "UploadSessionState",
     "UploadedFile",
@@ -50,23 +51,6 @@ class BatchSettings(BaseModel):
     )
     confidence_auto_approve: Probability | None = None
     confidence_review_floor: Probability | None = None
-    llm_enabled: bool | None = Field(
-        default=None,
-        description="Disable to keep document text inside this deployment entirely.",
-    )
-    allow_vision: bool = Field(
-        default=False,
-        description=(
-            "Permit sending page IMAGES to the language model for documents where "
-            "text extraction produced nothing. Off unless explicitly opted in."
-        ),
-    )
-    password: str | None = Field(
-        default=None,
-        description="Password for encrypted PDFs in this batch. Never stored in clear.",
-        max_length=256,
-        exclude=True,
-    )
 
     @field_validator("ocr_languages")
     @classmethod
@@ -145,11 +129,23 @@ class DocumentSummary(BaseModel):
     status: DocumentStatus
     error_code: str | None = None
     error_message: str | None = None
+    remediation: str | None = Field(
+        default=None, description="What to do about a failure, derived from its error code."
+    )
     is_duplicate_of: uuid.UUID | None = None
     parent_document_id: uuid.UUID | None = None
     archive_member_path: str | None = None
     is_encrypted: bool = False
+    processing_started_at: dt.datetime | None = None
+    processing_completed_at: dt.datetime | None = None
     created_at: dt.datetime
+    updated_at: dt.datetime | None = None
+
+    @model_validator(mode="after")
+    def _derive_remediation(self) -> DocumentSummary:
+        if self.remediation is None and self.error_code:
+            self.remediation = remediation_for(self.error_code)
+        return self
 
 
 class BatchDetail(BatchSummary):
@@ -185,6 +181,13 @@ class UploadedFile(BaseModel):
         default_factory=list,
         description="Documents unpacked from an uploaded archive.",
     )
+    error_code: str | None = Field(
+        default=None, description="Why the file was rejected, when status is FAILED."
+    )
+    error_message: str | None = None
+    remediation: str | None = Field(
+        default=None, description="What to do about the rejection, in one sentence."
+    )
 
 
 class UploadInit(BaseModel):
@@ -195,22 +198,15 @@ class UploadInit(BaseModel):
     client_file_id: str = Field(
         min_length=1,
         max_length=128,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
         description=(
             "Stable, client-generated id for this file. Re-announcing the same id "
             "resumes the existing upload rather than starting a new one."
         ),
     )
     filename: str = Field(min_length=1, max_length=512)
-    size: int = Field(ge=0, description="Total byte length the client will send.")
+    size: int = Field(ge=1, description="Total byte length the client will send.")
     content_type: str | None = Field(default=None, max_length=128)
-    sha256: str | None = Field(
-        default=None,
-        pattern=r"^[0-9a-fA-F]{64}$",
-        description=(
-            "Optional client-computed digest. Used only to skip uploading a known "
-            "duplicate; the server recomputes and verifies it regardless."
-        ),
-    )
 
     @field_validator("filename")
     @classmethod
@@ -219,7 +215,11 @@ class UploadInit(BaseModel):
 
 
 class UploadSessionState(BaseModel):
-    """Where a resumable upload currently stands."""
+    """Where a resumable upload currently stands.
+
+    The client resumes by sending the chunk that starts at ``received_bytes``.
+    Every chunk except the last must be exactly ``chunk_size`` bytes.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -232,24 +232,15 @@ class UploadSessionState(BaseModel):
     is_complete: bool
     document_id: uuid.UUID | None = None
     expires_at: dt.datetime
-    already_ingested: bool = Field(
-        default=False,
-        description=(
-            "The supplied digest matches a document already in this workspace, so "
-            "the client can skip sending the bytes entirely."
-        ),
+
+
+class UploadCompleteRequest(BaseModel):
+    """Finish a resumable upload once every byte has arrived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    password: str | None = Field(
+        default=None,
+        max_length=256,
+        description=("Password for an encrypted PDF. Used once to open the file and never stored."),
     )
-
-    @property
-    def next_offset(self) -> int:
-        return self.received_bytes
-
-
-class UploadChunkResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    upload_id: uuid.UUID
-    received_bytes: int
-    declared_size: int
-    is_complete: bool
-    document: UploadedFile | None = None

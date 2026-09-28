@@ -137,6 +137,9 @@ class ArchiveMember:
     compressed_size: int
     uncompressed_size: int
 
+    entry_name: str = ""
+    """The raw central-directory name, so a consumer can open exactly this entry."""
+
 
 @dataclass(frozen=True, slots=True)
 class ArchiveInspection:
@@ -239,6 +242,7 @@ def inspect_archive(
                 path=safe_path,
                 compressed_size=info.compress_size,
                 uncompressed_size=info.file_size,
+                entry_name=info.filename,
             )
         )
 

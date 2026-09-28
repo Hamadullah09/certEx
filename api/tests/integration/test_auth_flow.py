@@ -199,15 +199,17 @@ class TestRefreshRotation:
         await login(api_client, operator_user)
         await api_client.post(REFRESH)
 
-        tokens = (
-            await db_session.scalars(select(RefreshToken).order_by(RefreshToken.issued_at))
-        ).all()
+        tokens = (await db_session.scalars(select(RefreshToken))).all()
         assert len(tokens) == 2
-        assert tokens[0].consumed_at is not None
-        assert tokens[1].consumed_at is None
+        # Told apart by what happened to them, not by when: both rows are written in
+        # one transaction here, so their timestamps can be identical and their order
+        # undefined.
+        consumed = [token for token in tokens if token.consumed_at is not None]
+        live = [token for token in tokens if token.consumed_at is None]
+        assert len(consumed) == 1 and len(live) == 1
         # Successor belongs to the same family and is linked from its predecessor.
-        assert tokens[0].family_id == tokens[1].family_id
-        assert tokens[0].replaced_by_id == tokens[1].id
+        assert consumed[0].family_id == live[0].family_id
+        assert consumed[0].replaced_by_id == live[0].id
 
     async def test_replaying_a_consumed_token_revokes_the_family(
         self, api_client: AsyncClient, db_session, operator_user: User

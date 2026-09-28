@@ -316,9 +316,9 @@ class TestEndToEnd:
             source_snippet=PII_CORPUS["address"],
         )
         logger.info(
-            "llm.request",
-            prompt=f"Extract fields from: {PII_CORPUS['latin_name']}",
-            model="claude-sonnet-4-5",
+            "ocr.page_read",
+            raw_text=f"Name of Child: {PII_CORPUS['latin_name']}",
+            ocr_engine="tesseract",
         )
 
         try:
@@ -335,7 +335,7 @@ class TestEndToEnd:
         # The non-PII telemetry must survive, or the redaction is useless.
         assert "extraction.completed" in output
         assert "father_full_name" in output
-        assert "claude-sonnet-4-5" in output
+        assert "tesseract" in output
         assert "1f0d9e2a-0000-4000-8000-000000000001" in output
 
     def test_exception_tracebacks_are_scrubbed(self, captured_logs: io.StringIO) -> None:

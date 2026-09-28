@@ -70,16 +70,13 @@ def _init_worker_process(**_kwargs: object) -> None:
 
 @worker_ready.connect
 def _on_worker_ready(**_kwargs: object) -> None:
-    settings = get_settings()
-    logger.info(
-        "worker.ready",
-        queue=",".join(sorted(str(queue.name) for queue in settings_queues())),
-        provider=settings.llm_provider.value,
-    )
+    logger.info("worker.ready", queue=",".join(consumed_queue_names()))
 
 
-def settings_queues() -> tuple[object, ...]:
-    return tuple(celery_app.conf.task_queues or ())
+def consumed_queue_names() -> list[str]:
+    """Names of the queues this worker consumes, for the readiness log line."""
+    queues = celery_app.conf.task_queues or ()
+    return sorted(str(getattr(queue, "name", queue)) for queue in queues)
 
 
 @task_prerun.connect

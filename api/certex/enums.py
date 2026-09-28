@@ -325,6 +325,7 @@ class AuditAction(StrEnum):
     BATCH_VIEWED = "batch.viewed"
 
     DOCUMENT_UPLOADED = "document.uploaded"
+    DOCUMENT_REMOVED = "document.removed"
     DOCUMENT_DEDUPLICATED = "document.deduplicated"
     DOCUMENT_REPROCESSED = "document.reprocessed"
     DOCUMENT_PAGE_VIEWED = "document.page_viewed"

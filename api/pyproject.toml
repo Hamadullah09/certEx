@@ -53,7 +53,6 @@ dependencies = [
   "mammoth==1.9.0",
 
   # --- OCR / imaging ---------------------------------------------------------
-  # numpy is held below 2.0 because paddlepaddle 2.6.x is built against 1.x.
   "numpy==1.26.4",
   "opencv-python-headless==4.10.0.84",
   "Pillow==11.1.0",
@@ -67,19 +66,9 @@ dependencies = [
   # --- Export ----------------------------------------------------------------
   "openpyxl==3.1.5",
 
-  # --- LLM providers ---------------------------------------------------------
-  "anthropic==0.45.0",
-  "openai==1.59.9",
 ]
 
 [project.optional-dependencies]
-# PaddleOCR is the secondary OCR engine. Split into an extra because the
-# paddlepaddle wheel is ~400 MB and is only installed in the worker image.
-paddle = [
-  "paddlepaddle==2.6.2",
-  "paddleocr==2.9.1",
-]
-
 dev = [
   "pytest==8.3.4",
   "pytest-asyncio==0.26.0",
@@ -167,7 +156,6 @@ module = [
   "pdfplumber.*",
   "fitz.*",
   "pytesseract.*",
-  "paddleocr.*",
   "cv2.*",
   "magic.*",
   "mammoth.*",
@@ -201,9 +189,7 @@ markers = [
   "unit: pure-logic tests, no external services",
   "integration: needs postgres/redis/minio",
   "ocr: needs the tesseract binary",
-  "paddle: needs paddleocr installed",
   "soffice: needs LibreOffice headless",
-  "llm: needs a reachable LLM provider (skipped unless LLM_API_KEY is set)",
   "golden: field-level accuracy assertions against hand-labelled fixtures",
   "load: 1000-document throughput and memory profile (slow)",
   "e2e: full browser flow",

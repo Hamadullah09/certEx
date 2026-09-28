@@ -37,7 +37,15 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from certex.db.base import Base, JSONDict, JSONList, TimestampMixin, enum_column, uuid_pk
+from certex.db.base import (
+    Base,
+    JSONDict,
+    JSONList,
+    TimestampMixin,
+    enum_column,
+    utcnow,
+    uuid_pk,
+)
 from certex.enums import (
     AuditAction,
     BatchStatus,
@@ -147,7 +155,7 @@ class RefreshToken(Base):
     """SHA-256 of the opaque token. The token itself is never stored."""
 
     issued_at: Mapped[dt.datetime] = mapped_column(
-        nullable=False, default=lambda: dt.datetime.now(dt.UTC), server_default=func.now()
+        nullable=False, default=utcnow, server_default=func.now()
     )
     expires_at: Mapped[dt.datetime] = mapped_column(nullable=False)
     consumed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
@@ -194,7 +202,7 @@ class Batch(Base, TimestampMixin):
     settings_json: Mapped[JSONDict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
-    """Per-batch overrides: expected types, OCR languages, thresholds, LLM switch."""
+    """Per-batch overrides: expected types, OCR languages and confidence thresholds."""
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -324,6 +332,12 @@ class PageText(Base, TimestampMixin):
     rotation: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     """Deskew angle applied before OCR, in degrees."""
 
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    """SHA-256 of the rendered page image plus the OCR recipe, keying the OCR cache.
+
+    Re-processing a document, or the same scan uploaded twice, hits the cache instead
+    of spending seconds of CPU per page again."""
+
     document: Mapped[Document] = relationship(back_populates="pages")
 
 
@@ -444,7 +458,18 @@ class Extraction(Base, TimestampMixin):
     flags_jsonb: Mapped[JSONList] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]"
     )
-    """List of :class:`certex.enums.ValidationFlag` values."""
+    """List of :class:`certex.enums.ValidationFlag` values.
+
+    Flat and indexed, because the results grid filters on it: "show me every row with a
+    date problem" has to stay a single indexed query over millions of rows."""
+
+    field_issues_jsonb: Mapped[JSONList] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    """Per-field detail behind the flags: ``{field, flag, detail}``.
+
+    A flag alone tells a reviewer that something is wrong; this tells them which value
+    to look at and why, which is what they act on."""
 
     row_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     review_status: Mapped[ReviewStatus] = mapped_column(
@@ -492,7 +517,7 @@ class FieldCorrection(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     corrected_at: Mapped[dt.datetime] = mapped_column(
-        nullable=False, default=lambda: dt.datetime.now(dt.UTC), server_default=func.now()
+        nullable=False, default=utcnow, server_default=func.now()
     )
 
     extraction: Mapped[Extraction] = relationship(back_populates="corrections")
@@ -575,7 +600,7 @@ class Export(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[dt.datetime] = mapped_column(
-        nullable=False, default=lambda: dt.datetime.now(dt.UTC), server_default=func.now()
+        nullable=False, default=utcnow, server_default=func.now()
     )
 
 
@@ -608,7 +633,7 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         nullable=False,
-        default=lambda: dt.datetime.now(dt.UTC),
+        default=utcnow,
         server_default=func.now(),
         index=True,
     )
@@ -692,5 +717,5 @@ class DeadLetterTask(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     replayed_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
-        nullable=False, default=lambda: dt.datetime.now(dt.UTC), server_default=func.now()
+        nullable=False, default=utcnow, server_default=func.now()
     )

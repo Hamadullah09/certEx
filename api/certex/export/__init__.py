@@ -1,1 +1,1 @@
-"""CSV, XLSX and JSON export writers."""
+"""Stage 10 - turning rows into the file an office actually works with."""

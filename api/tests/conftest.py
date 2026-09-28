@@ -24,7 +24,6 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256-signing")
 os.environ.setdefault("SEED_ENABLED", "false")
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
-os.environ.setdefault("LLM_ENABLED", "false")
 os.environ.setdefault("CLAMAV_ENABLED", "false")
 # bcrypt at cost 12 makes an auth test suite take minutes. 4 is the library
 # minimum and exercises exactly the same code path.

@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+import fitz
 from pypdf import PdfReader
 from pypdf.errors import DependencyError, EmptyFileError, PdfReadError, PdfStreamError
 
 from certex.core.errors import CorruptDocumentError, EncryptedDocumentError
 from certex.logging_setup import get_logger, safe_error
 
-__all__ = ["PdfProbe", "PdfProblem", "probe_pdf", "raise_for_probe"]
+__all__ = ["PdfProbe", "PdfProblem", "probe_pdf", "raise_for_probe", "remove_encryption"]
 
 logger = get_logger(__name__)
 
@@ -99,8 +100,8 @@ def raise_for_probe(probe: PdfProbe, *, filename_known: bool = True) -> None:
         raise EncryptedDocumentError(
             f"{where} is password protected and could not be opened.",
             remediation=(
-                "Re-upload the batch with the document password supplied in the "
-                "batch settings, or remove the protection before uploading."
+                "Upload the file again with its password entered next to it, or "
+                "remove the protection before uploading."
             ),
         )
 
@@ -130,3 +131,42 @@ def raise_for_probe(probe: PdfProbe, *, filename_known: bool = True) -> None:
             "it opens in a PDF reader, try re-saving it first."
         ),
     )
+
+
+def remove_encryption(source: Path, destination: Path, *, password: str | None) -> None:
+    """Write an unencrypted copy of ``source`` to ``destination``.
+
+    Runs once, at ingest, for any PDF that opened successfully but carries
+    encryption - whether it needed the supplied password or only restricts
+    permissions behind an empty one. Every later stage then reads a plain PDF,
+    which is what keeps the password out of the database, the task queue and the
+    worker: it is used for this one call and discarded.
+
+    The stored copy is still encrypted at rest by the object store, so removing
+    the PDF's own encryption does not leave the document unprotected.
+    """
+    document = fitz.open(str(source))
+    try:
+        if document.needs_pass and not document.authenticate(password or ""):
+            raise EncryptedDocumentError(
+                "The password supplied for this PDF was not accepted.",
+                remediation="Check the password for this file and upload it again.",
+            )
+        document.save(
+            str(destination),
+            encryption=fitz.PDF_ENCRYPT_NONE,
+            garbage=1,
+            deflate=True,
+        )
+    except EncryptedDocumentError:
+        raise
+    except (RuntimeError, ValueError, OSError) as exc:
+        # MuPDF raises RuntimeError subclasses for damaged objects it can only
+        # partially repair; that is a corrupt document, not a server fault.
+        raise CorruptDocumentError(
+            "The PDF opened with its password but could not be re-saved; it appears damaged.",
+            remediation="Re-export the document from the source system and upload again.",
+        ) from exc
+    finally:
+        document.close()
+    logger.info("pdfprobe.encryption_removed", status="ok")

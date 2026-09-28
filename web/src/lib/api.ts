@@ -125,7 +125,7 @@ let refreshInFlight: Promise<boolean> | null = null;
  * refreshes in parallel would consume one token and replay another, which the
  * server treats as theft and punishes by revoking the whole family.
  */
-async function refreshSession(): Promise<boolean> {
+export async function refreshSession(): Promise<boolean> {
   refreshInFlight ??= (async () => {
     try {
       const response = await fetch(`${apiBaseUrl()}/api/v1/auth/refresh`, {
@@ -178,8 +178,10 @@ async function execute(path: string, options: RequestOptions): Promise<Response>
   };
 
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  // Raw bytes - an upload chunk - travel as-is, never JSON-encoded.
+  const isBlob = typeof Blob !== "undefined" && options.body instanceof Blob;
   if (options.body !== undefined && !isFormData) {
-    headers["Content-Type"] ??= "application/json";
+    headers["Content-Type"] ??= isBlob ? "application/octet-stream" : "application/json";
   }
 
   if (!SAFE_METHODS.has(method)) {
@@ -195,7 +197,8 @@ async function execute(path: string, options: RequestOptions): Promise<Response>
   };
 
   if (options.body !== undefined) {
-    init.body = isFormData ? (options.body as FormData) : JSON.stringify(options.body);
+    init.body =
+      isFormData || isBlob ? (options.body as FormData | Blob) : JSON.stringify(options.body);
   }
 
   try {
