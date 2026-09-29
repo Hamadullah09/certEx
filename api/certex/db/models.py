@@ -854,6 +854,10 @@ class Certificate(Base, TimestampMixin):
         CheckConstraint(
             "duplicate_of_id IS NULL OR duplicate_of_id <> id", name="duplicate_of_is_another_row"
         ),
+        CheckConstraint(
+            "superseded_by_id IS NULL OR superseded_by_id <> id",
+            name="superseded_by_is_another_row",
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -955,7 +959,17 @@ class Certificate(Base, TimestampMixin):
     duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("certificates.id", ondelete="SET NULL"), nullable=True
     )
-    """The entry this one appears to repeat. Never acted on automatically."""
+    """The entry this one appears to repeat. A question, never a decision: it is set
+    by detection and cleared when the question is settled."""
+
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("certificates.id", ondelete="SET NULL"), nullable=True
+    )
+    """The entry that replaced this one, once a person decided they were the same
+    certificate. Separate from ``duplicate_of_id`` because the two mean different
+    things and pointing at the same column for both makes the register unreadable:
+    one is a suspicion, the other is a decision, and only the decision is what a
+    clerk should follow to the authoritative entry."""
 
     # --- provenance of the record ------------------------------------------
     source: Mapped[CertificateSource] = mapped_column(

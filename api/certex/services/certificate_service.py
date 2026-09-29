@@ -43,6 +43,7 @@ from certex.db.models import (
     CertificateDocument,
     CertificateName,
     CertificateRevision,
+    Document,
 )
 from certex.enums import (
     CertificateSource,
@@ -789,3 +790,73 @@ async def load_detail(
     if certificate is None:
         raise NotFoundError("That certificate is not in this register.")
     return certificate
+
+
+async def replace_document(
+    session: AsyncSession,
+    *,
+    certificate: Certificate,
+    link_id: uuid.UUID,
+    document_id: uuid.UUID,
+    unit_id: uuid.UUID | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
+    note: str | None = None,
+    actor_id: uuid.UUID | None = None,
+) -> tuple[CertificateDocument, CertificateDocument]:
+    """Attach a better scan and keep the one it replaces.
+
+    Returns (replaced, added). The old link is marked superseded rather than deleted: a
+    value in the register was read from that image, and "why does it say that" has to
+    stay answerable against the image it was actually read from - not against a later,
+    better photograph of the same page.
+    """
+    replaced = await session.scalar(
+        select(CertificateDocument).where(
+            CertificateDocument.id == link_id,
+            CertificateDocument.certificate_id == certificate.id,
+            CertificateDocument.workspace_id == certificate.workspace_id,
+        )
+    )
+    if replaced is None:
+        raise NotFoundError("That document is not attached to this certificate.")
+
+    document = await session.get(Document, document_id)
+    if document is None or document.workspace_id != certificate.workspace_id:
+        raise NotFoundError("That document is not in this workspace.")
+    if document.id == replaced.document_id:
+        raise ConflictError(
+            "That is the scan already attached.",
+            remediation="Upload the new scan first, then replace this one with it.",
+        )
+
+    existing = await session.scalar(
+        _existing_link(certificate_id=certificate.id, document_id=document.id, unit_id=unit_id)
+    )
+    if existing is not None:
+        raise ConflictError(
+            "That scan is already attached to this entry.",
+            remediation="Remove the duplicate attachment, or replace the other link.",
+        )
+
+    replaced.kind = DocumentLinkKind.SUPERSEDED
+    added = CertificateDocument(
+        certificate_id=certificate.id,
+        document_id=document.id,
+        unit_id=unit_id,
+        workspace_id=certificate.workspace_id,
+        kind=DocumentLinkKind.PRIMARY,
+        page_start=page_start if page_start is not None else replaced.page_start,
+        page_end=page_end if page_end is not None else replaced.page_end,
+        note=note,
+        linked_by=actor_id,
+    )
+    session.add(added)
+    await session.flush()
+    logger.info(
+        "certificate.document_replaced",
+        entity_id=str(certificate.id),
+        document_id=str(document.id),
+        related_id=str(replaced.id),
+    )
+    return replaced, added

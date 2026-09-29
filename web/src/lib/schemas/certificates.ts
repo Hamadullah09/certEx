@@ -85,6 +85,8 @@ export const certificateDetailSchema = certificateSummarySchema.extend({
   schema_version_id: z.string().uuid().nullish(),
   record_version: z.number().int(),
   duplicate_of_id: z.string().uuid().nullish(),
+  /** Set only once a person decided two entries were the same certificate. */
+  superseded_by_id: z.string().uuid().nullish(),
   values: z.record(z.string(), z.string()),
   confidences: z.record(z.string(), z.number()),
   provenance: provenanceSchema,

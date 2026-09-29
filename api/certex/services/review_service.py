@@ -342,11 +342,11 @@ async def resolve_duplicate(
 
     if same_certificate:
         later.status = CertificateStatus.SUPERSEDED
-        later.duplicate_of_id = earlier.id
-        earlier.duplicate_of_id = None
-    else:
-        later.duplicate_of_id = None
-        earlier.duplicate_of_id = None
+        later.superseded_by_id = earlier.id
+    # The suspicion is cleared either way: it has been answered, and leaving it set
+    # would keep pointing a clerk at a question somebody already settled.
+    later.duplicate_of_id = None
+    earlier.duplicate_of_id = None
 
     decision = DuplicateStatus.CONFIRMED if same_certificate else DuplicateStatus.DISTINCT
     for entry in (earlier, later):

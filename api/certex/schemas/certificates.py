@@ -30,6 +30,7 @@ __all__ = [
     "CertificateSummary",
     "DocumentLink",
     "DocumentLinkCreate",
+    "DocumentReplacement",
     "DuplicateCandidate",
     "NamedValue",
     "TypedDate",
@@ -101,6 +102,32 @@ class DocumentLinkCreate(BaseModel):
         return self
 
 
+class DocumentReplacement(BaseModel):
+    """A better scan of a certificate the register already holds a scan of."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: uuid.UUID
+    unit_id: uuid.UUID | None = None
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+    note: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Why the scan was replaced - crooked, cut off, too dark to read.",
+    )
+
+    @model_validator(mode="after")
+    def _pages_ordered(self) -> DocumentReplacement:
+        if (
+            self.page_start is not None
+            and self.page_end is not None
+            and self.page_end < self.page_start
+        ):
+            raise ValueError("The last page cannot come before the first.")
+        return self
+
+
 class CertificateSummary(BaseModel):
     """One row of a result list.
 
@@ -153,7 +180,17 @@ class CertificateDetail(CertificateSummary):
 
     schema_version_id: uuid.UUID | None = None
     record_version: int
-    duplicate_of_id: uuid.UUID | None = None
+    duplicate_of_id: uuid.UUID | None = Field(
+        default=None,
+        description="An entry this one appears to repeat. A question, not a decision.",
+    )
+    superseded_by_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The entry that replaced this one. Set only when a person decided the two "
+            "were the same certificate; follow it to the authoritative entry."
+        ),
+    )
     values: dict[str, str] = Field(default_factory=dict)
     confidences: dict[str, float] = Field(default_factory=dict)
     provenance: dict[str, dict[str, str | int | float | None]] = Field(default_factory=dict)

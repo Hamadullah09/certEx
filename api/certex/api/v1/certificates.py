@@ -29,7 +29,13 @@ from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, WorkspaceScopeDep
 from certex.core.errors import BadRequestError, NotFoundError, ValidationFailedError
 from certex.db.models import Certificate, CertificateDocument, CertificateTypeRecord, Document
-from certex.enums import AuditAction, CertificateSource, CertificateType, UserRole
+from certex.enums import (
+    AuditAction,
+    CertificateSource,
+    CertificateType,
+    RevisionAction,
+    UserRole,
+)
 from certex.export.columns import Column, ColumnPlan
 from certex.export.rows import ExportRow
 from certex.export.writers import DELIMITERS, write_csv_stream
@@ -41,6 +47,7 @@ from certex.schemas.certificates import (
     CertificateSummary,
     DocumentLink,
     DocumentLinkCreate,
+    DocumentReplacement,
     DuplicateCandidate,
 )
 from certex.schemas.common import Cursor, Page
@@ -827,3 +834,68 @@ async def get_document_content(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post(
+    "/{certificate_id}/documents/{link_id}/replace",
+    response_model=list[DocumentLink],
+    summary="Attach a better scan, keeping the old one",
+    responses={
+        403: {"description": "Replacing a scan is an operator's action."},
+        404: {"description": "No such entry, link, or document in this workspace."},
+        409: {"description": "That document is already attached to this entry."},
+    },
+)
+async def replace_document(
+    certificate_id: uuid.UUID,
+    link_id: uuid.UUID,
+    payload: DocumentReplacement,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> list[DocumentLink]:
+    """A re-scan does not delete the scan it improves on.
+
+    Registers get photographed twice: the first pass is crooked or the flash washed out
+    half the page, and somebody scans it again properly. The new file becomes the
+    certificate's scan and the old one is marked superseded rather than removed, because
+    a value in the register was read from the old one and "why does it say that" has to
+    stay answerable against the image it was actually read from.
+
+    Returns both links, the new one first.
+    """
+    scope.require(UserRole.OPERATOR)
+
+    certificate = await certificate_service.get_certificate(
+        session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+    )
+    replaced, added = await certificate_service.replace_document(
+        session,
+        certificate=certificate,
+        link_id=link_id,
+        document_id=payload.document_id,
+        unit_id=payload.unit_id,
+        page_start=payload.page_start,
+        page_end=payload.page_end,
+        note=payload.note,
+        actor_id=scope.user_id,
+    )
+    certificate.record_version += 1
+    certificate.updated_by = scope.user_id
+    certificate_service.record_revision(
+        session,
+        certificate,
+        action=RevisionAction.DOCUMENT_REPLACED,
+        note=payload.note,
+        actor_id=scope.user_id,
+    )
+    await record_audit(
+        session,
+        AuditAction.CERTIFICATE_DOCUMENT_LINKED,
+        audit,
+        entity_type="certificate",
+        entity_id=certificate.id,
+        metadata={"related_id": str(replaced.id), "reason_code": "document_replaced"},
+    )
+    await session.commit()
+    return [DocumentLink.model_validate(added), DocumentLink.model_validate(replaced)]

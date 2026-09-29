@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowRightLeft,
   ChevronLeft,
   CircleAlert,
   Copy,
@@ -93,6 +94,7 @@ function DocumentRow({
   certificateId: string;
   link: DocumentLink;
 }) {
+  const superseded = link.kind === "SUPERSEDED";
   const pages =
     link.page_start && link.page_end
       ? link.page_start === link.page_end
@@ -107,6 +109,12 @@ function DocumentRow({
           {link.kind === "PRIMARY" ? "The certificate" : link.kind.toLowerCase()}
           {pages ? <span className="text-muted-foreground"> · {pages}</span> : null}
         </p>
+        {superseded ? (
+          <p className="text-sm text-muted-foreground">
+            A better scan replaced this one. It is kept because values in the register
+            were read from it.
+          </p>
+        ) : null}
         {link.note ? <p className="text-sm text-muted-foreground">{link.note}</p> : null}
       </div>
       {/* Opened through the API, which checks the session and records who looked.
@@ -238,6 +246,23 @@ export default function CertificateDetailPage() {
             </div>
           }
         />
+
+        {certificate.superseded_by_id ? (
+          <Alert variant="warning">
+            <ArrowRightLeft aria-hidden="true" />
+            <AlertTitle>This entry has been replaced</AlertTitle>
+            <AlertDescription>
+              A reviewer decided this and another entry were the same certificate.{" "}
+              <Link
+                href={`/register/certificates/${certificate.superseded_by_id}`}
+                className="underline underline-offset-4"
+              >
+                Open the entry that replaced it
+              </Link>
+              . This one is kept because somebody may be holding a copy of it.
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         <Duplicates candidates={candidates ?? []} />
 
