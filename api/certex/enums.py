@@ -12,14 +12,20 @@ __all__ = [
     "AuditAction",
     "BatchStatus",
     "BoundaryMethod",
+    "CertificateSource",
+    "CertificateStatus",
     "CertificateType",
     "ClassificationMethod",
+    "DocumentLinkKind",
     "DocumentStatus",
+    "DuplicateStatus",
     "ExportFormat",
     "ExtractionMethod",
+    "FieldRole",
     "OcrEngine",
     "PageExtractionSource",
     "ReviewStatus",
+    "SchemaVersionStatus",
     "Sex",
     "UnitStatus",
     "UserRole",
@@ -72,6 +78,12 @@ class BatchStatus(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
 
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    """Processing finished but rows are waiting on a person."""
+
+    ARCHIVED = "ARCHIVED"
+    """Closed and hidden from the working list; records stay searchable."""
+
     @property
     def is_terminal(self) -> bool:
         return self in _TERMINAL_BATCH_STATUSES
@@ -83,6 +95,7 @@ _TERMINAL_BATCH_STATUSES: frozenset[BatchStatus] = frozenset(
         BatchStatus.COMPLETED_WITH_ERRORS,
         BatchStatus.FAILED,
         BatchStatus.CANCELLED,
+        BatchStatus.ARCHIVED,
     }
 )
 
@@ -310,6 +323,106 @@ class ValidationFlag(StrEnum):
     UNKNOWN_CERTIFICATE_TYPE = "UNKNOWN_CERTIFICATE_TYPE"
 
 
+class FieldRole(StrEnum):
+    """What a field *means*, as opposed to what it is called.
+
+    A dynamic schema lets an operator name their fields anything - ``name``,
+    ``child_name``, ``نام`` - which leaves generic code with no way to know that
+    one of them is the person the certificate is about. A role says so.
+
+    Roles are what let one implementation serve every certificate type:
+
+    * the identifier drives certificate-number indexing and duplicate detection;
+    * the name and parent roles drive the denormalised search columns;
+    * the date and age roles drive the cross-field checks (a death cannot precede
+      a birth) without those rules naming a single hardcoded field.
+
+    A field with no role is still extracted, exported and searched by key - it
+    simply takes no part in the semantic rules.
+    """
+
+    NONE = "none"
+
+    IDENTIFIER = "identifier"
+    """The certificate number. Exactly one per schema, indexed and duplicate-checked."""
+
+    SECONDARY_REFERENCE = "secondary_reference"
+    """A registration or entry number, where it differs from the identifier."""
+
+    SUBJECT_NAME = "subject_name"
+    """The person the certificate is about: the child, the deceased."""
+
+    PARTY_NAME = "party_name"
+    """One of two equal parties, as on a marriage certificate."""
+
+    FATHER_NAME = "father_name"
+    MOTHER_NAME = "mother_name"
+    SPOUSE_NAME = "spouse_name"
+
+    BIRTH_DATE = "birth_date"
+    DEATH_DATE = "death_date"
+    MARRIAGE_DATE = "marriage_date"
+    EVENT_DATE = "event_date"
+    """The date the certificate records, when it is none of the above."""
+
+    REGISTRATION_DATE = "registration_date"
+    ISSUE_DATE = "issue_date"
+
+    AGE = "age"
+    SEX = "sex"
+    ADDRESS = "address"
+    PLACE = "place"
+    ISSUING_AUTHORITY = "issuing_authority"
+
+    @property
+    def is_name(self) -> bool:
+        return self in _NAME_ROLES
+
+    @property
+    def is_date(self) -> bool:
+        return self in _DATE_ROLES
+
+
+_NAME_ROLES: frozenset[FieldRole] = frozenset(
+    {
+        FieldRole.SUBJECT_NAME,
+        FieldRole.PARTY_NAME,
+        FieldRole.FATHER_NAME,
+        FieldRole.MOTHER_NAME,
+        FieldRole.SPOUSE_NAME,
+    }
+)
+
+_DATE_ROLES: frozenset[FieldRole] = frozenset(
+    {
+        FieldRole.BIRTH_DATE,
+        FieldRole.DEATH_DATE,
+        FieldRole.MARRIAGE_DATE,
+        FieldRole.EVENT_DATE,
+        FieldRole.REGISTRATION_DATE,
+        FieldRole.ISSUE_DATE,
+    }
+)
+
+
+class SchemaVersionStatus(StrEnum):
+    """A schema version's lifecycle.
+
+    Published versions are immutable. Certificates reference the exact version
+    they were read under, so editing one in place would silently rewrite the
+    meaning of records already in the registry.
+    """
+
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    ARCHIVED = "ARCHIVED"
+    """Superseded. Still readable, no longer offered for new batches."""
+
+    @property
+    def is_editable(self) -> bool:
+        return self is SchemaVersionStatus.DRAFT
+
+
 class AuditAction(StrEnum):
     """Every entry recorded in ``audit_log``."""
 
@@ -335,6 +448,15 @@ class AuditAction(StrEnum):
     EXTRACTION_REPROCESSED = "extraction.reprocessed"
     EXTRACTION_APPROVED = "extraction.approved"
 
+    CERTIFICATE_CREATED = "certificate.created"
+    CERTIFICATE_UPDATED = "certificate.updated"
+    CERTIFICATE_VIEWED = "certificate.viewed"
+    CERTIFICATE_VOIDED = "certificate.voided"
+    CERTIFICATE_DUPLICATE_FLAGGED = "certificate.duplicate_flagged"
+    CERTIFICATE_DUPLICATE_RESOLVED = "certificate.duplicate_resolved"
+    CERTIFICATE_DOCUMENT_LINKED = "certificate.document_linked"
+    CERTIFICATE_DOCUMENT_VIEWED = "certificate.document_viewed"
+
     UNIT_SPLIT = "unit.split"
     UNIT_MERGED = "unit.merged"
 
@@ -350,3 +472,67 @@ class AuditAction(StrEnum):
     USER_DELETED = "user.deleted"
 
     RETENTION_PURGED = "retention.purged"
+
+
+class CertificateStatus(StrEnum):
+    """Whether a registry entry is the one to rely on."""
+
+    ACTIVE = "ACTIVE"
+    """The current entry for this certificate."""
+
+    SUPERSEDED = "SUPERSEDED"
+    """Replaced by another entry, which it points at. Kept, never deleted: the
+    register is a historical record, and an entry that once existed has to remain
+    findable for anyone holding a copy of it."""
+
+    VOID = "VOID"
+    """Cancelled by the issuing office. Still readable, never used as an answer."""
+
+
+class DuplicateStatus(StrEnum):
+    """What has been decided about two entries carrying the same number.
+
+    Nothing is merged automatically. A repeated certificate number is a question
+    for a person - the same number is reused across offices and years, and two
+    genuinely different people can hold certificates that a machine cannot tell
+    apart - so detection only raises the question.
+    """
+
+    NONE = "NONE"
+    """No other entry looks like this one."""
+
+    SUSPECTED = "SUSPECTED"
+    """Detected automatically, not yet looked at by anyone."""
+
+    CONFIRMED = "CONFIRMED"
+    """A person decided these are the same certificate."""
+
+    DISTINCT = "DISTINCT"
+    """A person decided these are different certificates that happen to collide.
+    Recorded so the same pair is not raised again."""
+
+
+class CertificateSource(StrEnum):
+    """Where a registry entry came from. Decides how its provenance reads."""
+
+    EXTRACTION = "EXTRACTION"
+    """Read from an uploaded document by the pipeline."""
+
+    IMPORT = "IMPORT"
+    """Loaded from a CSV of existing records."""
+
+    MANUAL = "MANUAL"
+    """Typed in by an operator."""
+
+
+class DocumentLinkKind(StrEnum):
+    """Why a document is attached to a certificate."""
+
+    PRIMARY = "PRIMARY"
+    """The certificate itself: the page range this entry was read from."""
+
+    SUPPORTING = "SUPPORTING"
+    """An attachment - an affidavit, an identity document, a correction slip."""
+
+    SUPERSEDED = "SUPERSEDED"
+    """An earlier scan of the same certificate, kept for the record."""

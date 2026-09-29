@@ -24,6 +24,7 @@ from certex.db.models import User, Workspace
 from certex.db.session import session_scope
 from certex.enums import UserRole
 from certex.logging_setup import configure_logging, get_logger, safe_error
+from certex.services.schema_service import ensure_builtin_types_sync
 from certex.storage.s3 import get_object_storage
 
 logger = get_logger(__name__)
@@ -88,6 +89,13 @@ def _seed(settings: Settings) -> int:
 
         if created == 0:
             print("[seed] all demo accounts already present")
+
+        # The registry needs its types before anyone can create a batch.
+        types = ensure_builtin_types_sync(session, workspace_id=workspace.id)
+        if types:
+            print(f"[seed] created {types} certificate types with their v1 schemas")
+        else:
+            print("[seed] certificate types already present")
     return 0
 
 

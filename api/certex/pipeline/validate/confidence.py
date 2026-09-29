@@ -32,7 +32,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from certex.enums import CertificateType, ExtractionMethod, ReviewStatus, ValidationFlag
-from certex.fields import fields_for
+from certex.fields import FieldSchema, schema_or_builtin
 from certex.pipeline.validate.rules import ValidationOutcome
 
 __all__ = [
@@ -90,9 +90,10 @@ def score_row(
     field_methods: Mapping[str, str],
     outcome: ValidationOutcome,
     type_confidence: float = 1.0,
+    schema: FieldSchema | None = None,
 ) -> float:
     """How much of this certificate was read, and how well."""
-    specs = fields_for(certificate_type)
+    specs = schema_or_builtin(certificate_type, schema).fields
     if not specs:  # pragma: no cover - every type has at least the common fields
         return 0.0
 

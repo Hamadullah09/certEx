@@ -84,6 +84,7 @@ os.environ.setdefault("S3_BUCKET", "certex-test")
 
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy import text as sqlalchemy_text  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
     async_sessionmaker,
@@ -170,6 +171,10 @@ async def db_engine(require_postgres: None):
     create_test_database()
     engine = create_async_engine(TEST_URL, pool_pre_ping=True)
     async with engine.begin() as connection:
+        # The register's name indexes are trigram indexes, so the extension has to
+        # exist before create_all. The migration does the same thing for a real
+        # database; doing it here keeps the models and the schema in agreement.
+        await connection.execute(sqlalchemy_text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
     yield engine

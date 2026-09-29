@@ -30,8 +30,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-from certex.enums import CertificateType, ValidationFlag
-from certex.fields import FieldKind, fields_for
+from certex.enums import CertificateType, FieldRole, ValidationFlag
+from certex.fields import (
+    EVENT_DATE_ROLES,
+    FieldKind,
+    FieldSchema,
+    FieldSpec,
+    schema_or_builtin,
+)
 from certex.pipeline.extract.values import read_date, read_sex
 
 __all__ = ["FieldIssue", "RowFacts", "ValidationOutcome", "validate_row"]
@@ -63,6 +69,9 @@ class RowFacts:
 
     certificate_type: CertificateType
     values: Mapping[str, str]
+    field_schema: FieldSchema | None = None
+    """The version this row was read under. None falls back to the built-in."""
+
     printed: Mapping[str, str] = field(default_factory=dict)
     """What each field looked like on the page, before normalisation."""
 
@@ -72,6 +81,11 @@ class RowFacts:
     ocr_used: bool = False
     ocr_mean_confidence: float | None = None
     today: dt.date | None = None
+
+    @property
+    def schema(self) -> FieldSchema:
+        """The fields to validate against, however this row came to be read."""
+        return schema_or_builtin(self.certificate_type, self.field_schema)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +131,7 @@ def _check_completeness(facts: RowFacts, issues: list[FieldIssue]) -> None:
             )
         )
         return
-    for spec in fields_for(facts.certificate_type):
+    for spec in facts.schema.fields:
         if spec.required and spec.name not in present:
             issues.append(
                 FieldIssue(
@@ -130,7 +144,7 @@ def _check_completeness(facts: RowFacts, issues: list[FieldIssue]) -> None:
 
 def _check_dates(facts: RowFacts, issues: list[FieldIssue]) -> None:
     today = facts.today or dt.date.today()
-    for spec in fields_for(facts.certificate_type):
+    for spec in facts.schema.fields:
         if spec.kind is not FieldKind.DATE:
             continue
         raw = str(facts.values.get(spec.name, "")).strip()
@@ -194,109 +208,137 @@ def _order(
     issues.append(FieldIssue(field=field_name, flag=flag, detail=detail))
 
 
-def _check_consistency(facts: RowFacts, issues: list[FieldIssue]) -> None:
-    values = facts.values
-    birth = _parsed_date(values.get("date_of_birth"))
-    death = _parsed_date(values.get("date_of_death"))
-    marriage = _parsed_date(values.get("date_of_marriage"))
-    registration = _parsed_date(values.get("registration_date"))
-    issue_date = _parsed_date(values.get("date_of_issue"))
+def _dates_for(facts: RowFacts, *roles: FieldRole) -> list[tuple[FieldSpec, dt.date]]:
+    """Every parseable date the schema gives these roles, with its field."""
+    found: list[tuple[FieldSpec, dt.date]] = []
+    for spec in facts.schema.by_role(*roles):
+        parsed = _parsed_date(facts.values.get(spec.name))
+        if parsed is not None:
+            found.append((spec, parsed))
+    return found
 
-    _order(
-        issues,
-        earlier=birth,
-        later=death,
-        flag=ValidationFlag.DOD_BEFORE_DOB,
-        field_name="date_of_death",
-        detail="The date of death is before the date of birth.",
+
+def _check_consistency(facts: RowFacts, issues: list[FieldIssue]) -> None:
+    """Dates that cannot sit in the order they are printed in.
+
+    Driven entirely by roles, so the same code checks a death certificate with one
+    date of birth and a marriage certificate with two - and checks a schema an
+    operator invented this morning, whose fields this file has never heard of.
+    """
+    births = _dates_for(facts, FieldRole.BIRTH_DATE)
+    deaths = _dates_for(facts, FieldRole.DEATH_DATE)
+    marriages = _dates_for(facts, FieldRole.MARRIAGE_DATE)
+    registrations = _dates_for(facts, FieldRole.REGISTRATION_DATE)
+    issues_dates = _dates_for(facts, FieldRole.ISSUE_DATE)
+
+    for death_spec, death in deaths:
+        for _birth_spec, birth in births:
+            _order(
+                issues,
+                earlier=birth,
+                later=death,
+                flag=ValidationFlag.DOD_BEFORE_DOB,
+                field_name=death_spec.name,
+                detail="The date of death is before the date of birth.",
+            )
+
+    for marriage_spec, marriage in marriages:
+        for birth_spec, birth in births:
+            _order(
+                issues,
+                earlier=birth,
+                later=marriage,
+                flag=ValidationFlag.MARRIAGE_BEFORE_BIRTH,
+                field_name=marriage_spec.name,
+                detail=(f"The marriage is dated before {birth_spec.label.lower()} would allow."),
+            )
+
+    # The event a certificate records is whichever of these it carries, in the
+    # order the registry files entries under - shared with the register itself, so
+    # a validation message and a search result never disagree about which date the
+    # certificate is about.
+    event = next(
+        (date for role in EVENT_DATE_ROLES for _spec, date in _dates_for(facts, role)),
+        None,
     )
 
-    for party in ("groom", "bride"):
+    for registration_spec, registration in registrations:
         _order(
             issues,
-            earlier=_parsed_date(values.get(f"{party}_date_of_birth")),
-            later=marriage,
-            flag=ValidationFlag.MARRIAGE_BEFORE_BIRTH,
-            field_name="date_of_marriage",
-            detail=f"The marriage is dated before the {party} was born.",
+            earlier=event,
+            later=registration,
+            flag=ValidationFlag.REGISTRATION_BEFORE_EVENT,
+            field_name=registration_spec.name,
+            detail="The registration is dated before the event it records.",
         )
+        for issue_spec, issued in issues_dates:
+            _order(
+                issues,
+                earlier=registration,
+                later=issued,
+                flag=ValidationFlag.ISSUE_BEFORE_REGISTRATION,
+                field_name=issue_spec.name,
+                detail="The certificate is dated before the entry was registered.",
+            )
 
-    event = {
-        CertificateType.BIRTH: birth,
-        CertificateType.DEATH: death,
-        CertificateType.MARRIAGE: marriage,
-    }.get(facts.certificate_type)
-    _order(
-        issues,
-        earlier=event,
-        later=registration,
-        flag=ValidationFlag.REGISTRATION_BEFORE_EVENT,
-        field_name="registration_date",
-        detail="The registration is dated before the event it records.",
-    )
-    _order(
-        issues,
-        earlier=registration,
-        later=issue_date,
-        flag=ValidationFlag.ISSUE_BEFORE_REGISTRATION,
-        field_name="date_of_issue",
-        detail="The certificate is dated before the entry was registered.",
-    )
-
-    _check_age(facts, issues, birth=birth, death=death)
+    _check_age(facts, issues, births=births, deaths=deaths)
 
 
 def _check_age(
     facts: RowFacts,
     issues: list[FieldIssue],
     *,
-    birth: dt.date | None,
-    death: dt.date | None,
+    births: list[tuple[FieldSpec, dt.date]],
+    deaths: list[tuple[FieldSpec, dt.date]],
 ) -> None:
-    raw = str(facts.values.get("age_at_death", "")).strip()
-    if not raw:
-        return
-    try:
-        age = int(float(raw))
-    except ValueError:
-        issues.append(
-            FieldIssue(
-                field="age_at_death",
-                flag=ValidationFlag.VALUE_TRUNCATED,
-                detail=f"The age reads {raw!r}, which is not a number.",
+    """An age that disagrees with the dates printed beside it."""
+    for spec in facts.schema.by_role(FieldRole.AGE):
+        raw = str(facts.values.get(spec.name, "")).strip()
+        if not raw:
+            continue
+        try:
+            age = int(float(raw))
+        except ValueError:
+            issues.append(
+                FieldIssue(
+                    field=spec.name,
+                    flag=ValidationFlag.VALUE_TRUNCATED,
+                    detail=f"The age reads {raw!r}, which is not a number.",
+                )
             )
-        )
-        return
+            continue
 
-    if not 0 <= age <= _MAX_HUMAN_AGE:
-        issues.append(
-            FieldIssue(
-                field="age_at_death",
-                flag=ValidationFlag.AGE_INCONSISTENT,
-                detail=f"An age of {age} is not possible.",
+        if not 0 <= age <= _MAX_HUMAN_AGE:
+            issues.append(
+                FieldIssue(
+                    field=spec.name,
+                    flag=ValidationFlag.AGE_INCONSISTENT,
+                    detail=f"An age of {age} is not possible.",
+                )
             )
-        )
-        return
+            continue
 
-    if birth is None or death is None:
-        return
-    lived = death.year - birth.year - ((death.month, death.day) < (birth.month, birth.day))
-    if abs(lived - age) > _AGE_TOLERANCE_YEARS:
-        issues.append(
-            FieldIssue(
-                field="age_at_death",
-                flag=ValidationFlag.AGE_INCONSISTENT,
-                detail=(
-                    f"The age reads {age}, but the dates give {lived} years between "
-                    "birth and death."
-                ),
+        if not births or not deaths:
+            continue
+        birth = births[0][1]
+        death = deaths[0][1]
+        lived = death.year - birth.year - ((death.month, death.day) < (birth.month, birth.day))
+        if abs(lived - age) > _AGE_TOLERANCE_YEARS:
+            issues.append(
+                FieldIssue(
+                    field=spec.name,
+                    flag=ValidationFlag.AGE_INCONSISTENT,
+                    detail=(
+                        f"The age reads {age}, but the dates give {lived} years between "
+                        "birth and death."
+                    ),
+                )
             )
-        )
 
 
 def _check_identifiers(facts: RowFacts, issues: list[FieldIssue]) -> None:
     seen: dict[str, str] = {}
-    for spec in fields_for(facts.certificate_type):
+    for spec in facts.schema.fields:
         if spec.kind is not FieldKind.ID_NUMBER:
             continue
         raw = str(facts.values.get(spec.name, "")).strip()
@@ -327,7 +369,7 @@ def _check_identifiers(facts: RowFacts, issues: list[FieldIssue]) -> None:
 
 
 def _check_enumerations(facts: RowFacts, issues: list[FieldIssue]) -> None:
-    for spec in fields_for(facts.certificate_type):
+    for spec in facts.schema.fields:
         if spec.kind is not FieldKind.SEX:
             continue
         raw = str(facts.values.get(spec.name, "")).strip()

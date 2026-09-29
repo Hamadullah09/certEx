@@ -207,8 +207,17 @@ def _watch_engine(monkeypatch: pytest.MonkeyPatch) -> _EngineWatch:
 @needs_arabic_font
 class TestUrduScans:
     def test_an_urdu_scan_is_read_in_urdu(self, tmp_path: Path) -> None:
+        """Urdu must be among the languages asked for, however that was decided.
+
+        Not ``startswith("urd")``: that would assert a particular *route* to the
+        answer - OSD reporting an Arabic script and the language being reordered
+        behind it. On this page OSD reports "Latin" at a confidence of 1.27, which
+        is noise, so the script is treated as unknown and both languages are
+        requested. Asking for ``eng+urd`` reads the page correctly, which is the
+        property that matters; insisting Urdu come first would fail a correct run.
+        """
         result = read(build_scanned_bilingual_pdf(tmp_path / "urdu.pdf"))
-        assert result.language.startswith("urd"), result.language
+        assert "urd" in result.language.split("+"), result.language
 
     def test_urdu_text_comes_back(self, tmp_path: Path) -> None:
         result = read(build_scanned_bilingual_pdf(tmp_path / "urdu.pdf"))

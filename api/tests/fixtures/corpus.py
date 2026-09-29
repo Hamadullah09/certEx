@@ -53,12 +53,17 @@ __all__ = [
 LEGACY_DOC = Path(__file__).parent / "files" / "legacy_birth.doc"
 """Binary Word 97-2003 copy of the ``birth_lahore`` sample. See files/README.md."""
 
+# Order matters, and not for looks. Arabic shaping substitutes a lam-alef ligature
+# for the two letters, and a font whose ligature glyph has no reverse mapping in
+# its cmap extracts as unmappable rubbish - Noto Naskh Arabic does exactly that,
+# turning "لاہور" into control characters. Fonts that round-trip the ligature
+# come first, so the fixture's text layer says what the fixture printed.
 _FONT_CANDIDATES = (
+    Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     Path(r"C:\Windows\Fonts\arial.ttf"),
     Path(r"C:\Windows\Fonts\tahoma.ttf"),
     Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
-    Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
 )
 
 

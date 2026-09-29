@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     Float,
     ForeignKey,
     Index,
@@ -33,6 +34,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -50,13 +52,19 @@ from certex.enums import (
     AuditAction,
     BatchStatus,
     BoundaryMethod,
+    CertificateSource,
+    CertificateStatus,
     CertificateType,
     ClassificationMethod,
+    DocumentLinkKind,
     DocumentStatus,
+    DuplicateStatus,
     ExportFormat,
+    FieldRole,
     OcrEngine,
     PageExtractionSource,
     ReviewStatus,
+    SchemaVersionStatus,
     UnitStatus,
     UserRole,
 )
@@ -67,6 +75,12 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = [
     "AuditLog",
     "Batch",
+    "Certificate",
+    "CertificateDate",
+    "CertificateDocument",
+    "CertificateName",
+    "CertificateSchema",
+    "CertificateTypeRecord",
     "CertificateUnit",
     "DeadLetterTask",
     "Document",
@@ -75,6 +89,8 @@ __all__ = [
     "FieldCorrection",
     "PageText",
     "RefreshToken",
+    "SchemaField",
+    "SchemaVersion",
     "Template",
     "UploadSession",
     "User",
@@ -203,6 +219,24 @@ class Batch(Base, TimestampMixin):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     """Per-batch overrides: expected types, OCR languages and confidence thresholds."""
+
+    # -- registry metadata ----------------------------------------------------
+    # Nullable so every batch created before schemas existed still loads; those
+    # fall back to the built-in schema for their classified type.
+    certificate_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("certificate_types.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    schema_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("schema_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    """Pinned at creation. A later schema edit cannot change how this batch reads."""
+
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Registration year these records belong to, for filtering and reporting."""
+
+    registration_office: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    needs_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -573,6 +607,522 @@ class Template(Base, TimestampMixin):
     )
 
     workspace: Mapped[Workspace] = relationship(back_populates="templates")
+
+
+# ---------------------------------------------------------------------------
+# Certificate types and schemas
+# ---------------------------------------------------------------------------
+class CertificateTypeRecord(Base, TimestampMixin):
+    """A kind of certificate the registry holds: birth, marriage, death, or one an
+    administrator adds later.
+
+    Named ``...Record`` because :class:`certex.enums.CertificateType` already owns
+    the plain name. The two are not duplicates: the enum is what the *classifier*
+    can recognise in a document, and this table is what the *registry* offers. A
+    custom type has no classifier counterpart, which is why ``classifier_key`` is
+    nullable rather than required.
+    """
+
+    __tablename__ = "certificate_types"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "key", name="uq_certificate_types_workspace_id_key"),
+        Index("ix_certificate_types_workspace_id_position", "workspace_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    """Stable machine key, e.g. ``BIRTH``. Appears in URLs and CSV headers."""
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    classifier_key: Mapped[CertificateType | None] = mapped_column(
+        enum_column(CertificateType), nullable=True
+    )
+    """Which built-in classifier label maps to this type, when one does."""
+
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """Order in the navigation bar."""
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    schemas: Mapped[list[CertificateSchema]] = relationship(
+        back_populates="certificate_type", cascade="all, delete-orphan"
+    )
+
+
+class CertificateSchema(Base, TimestampMixin):
+    """A named schema for a certificate type. Its *versions* hold the fields."""
+
+    __tablename__ = "certificate_schemas"
+    __table_args__ = (
+        UniqueConstraint("certificate_type_id", "name", name="uq_certificate_schemas_type_id_name"),
+        Index("ix_certificate_schemas_workspace_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    certificate_type_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificate_types.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """Offered first when a batch of this type is created."""
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    certificate_type: Mapped[CertificateTypeRecord] = relationship(back_populates="schemas")
+    versions: Mapped[list[SchemaVersion]] = relationship(
+        back_populates="schema", cascade="all, delete-orphan"
+    )
+
+
+class SchemaVersion(Base, TimestampMixin):
+    """One immutable revision of a schema.
+
+    Certificate formats change. A record read under v1 must keep meaning what it
+    meant, so a published version is never edited - a new one is created instead.
+    Batches and certificates both point at the exact version they were read under.
+    """
+
+    __tablename__ = "schema_versions"
+    __table_args__ = (
+        UniqueConstraint("schema_id", "version", name="uq_schema_versions_schema_id_version"),
+        Index("ix_schema_versions_schema_id_status", "schema_id", "status"),
+        CheckConstraint("version >= 1", name="version_is_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    schema_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificate_schemas.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[SchemaVersionStatus] = mapped_column(
+        enum_column(SchemaVersionStatus), nullable=False, default=SchemaVersionStatus.DRAFT
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    schema: Mapped[CertificateSchema] = relationship(back_populates="versions")
+    fields: Mapped[list[SchemaField]] = relationship(
+        back_populates="schema_version",
+        cascade="all, delete-orphan",
+        order_by="SchemaField.position",
+    )
+
+
+class SchemaField(Base):
+    """One field of one schema version.
+
+    The columns mirror :class:`certex.fields.FieldSpec`, because a row here is
+    loaded straight into one. That is what keeps the extraction pipeline unaware
+    of whether a schema was shipped with the product or built by an operator.
+    """
+
+    __tablename__ = "schema_fields"
+    __table_args__ = (
+        UniqueConstraint("schema_version_id", "name", name="uq_schema_fields_version_id_name"),
+        Index("ix_schema_fields_schema_version_id_position", "schema_version_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    schema_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schema_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    """Machine key: the CSV header and the JSON key. Immutable once published."""
+
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
+    role: Mapped[FieldRole] = mapped_column(
+        enum_column(FieldRole), nullable=False, default=FieldRole.NONE
+    )
+
+    required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    searchable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    is_unique: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    labels_en: Mapped[JSONList] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    """Printed labels the rules engine matches, in English."""
+
+    labels_ur: Mapped[JSONList] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    validation_jsonb: Mapped[JSONDict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    """Extra per-field checks: min/max, pattern, enum members."""
+
+    schema_version: Mapped[SchemaVersion] = relationship(back_populates="fields")
+
+
+# ---------------------------------------------------------------------------
+# The register
+# ---------------------------------------------------------------------------
+class Certificate(Base, TimestampMixin):
+    """One entry in the register: a certificate the office holds.
+
+    This is the system of record. An ``Extraction`` says what one upload of one
+    document appeared to say; a ``Certificate`` is what the office asserts, and it
+    outlives the batch, the document and even the schema version it was first read
+    under.
+
+    Storage is deliberately hybrid. ``values_jsonb`` holds the whole row under
+    whatever field names the schema defines, so a type an operator invents needs no
+    migration. The columns beside it are the ones the registry searches, orders and
+    de-duplicates on, filled by role rather than by field name - see
+    :func:`certex.certificates.draft.build_draft`. Repeating roles (a marriage has
+    two parties) go to :class:`CertificateName` and :class:`CertificateDate`, which
+    is what keeps the second spouse as findable as the first.
+    """
+
+    __tablename__ = "certificates"
+    __table_args__ = (
+        # The certificate number is the identifier people actually quote, so every
+        # lookup and every duplicate check starts here. Not unique: the same number
+        # recurs across offices and years, and a collision is a question for a
+        # person rather than an error to throw away a record over.
+        Index("ix_certificates_number_key", "workspace_id", "certificate_number_key"),
+        Index(
+            "ix_certificates_registration_key",
+            "workspace_id",
+            "registration_number_key",
+            postgresql_where=text("registration_number_key IS NOT NULL"),
+        ),
+        Index("ix_certificates_type_event", "workspace_id", "certificate_type_id", "event_date"),
+        Index("ix_certificates_name_key", "workspace_id", "primary_name_key"),
+        # Trigram, so a misspelled or differently transliterated name still finds
+        # its record. A B-tree on the same column only answers prefix queries.
+        Index(
+            "ix_certificates_name_key_trgm",
+            "primary_name_key",
+            postgresql_using="gin",
+            postgresql_ops={"primary_name_key": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_certificates_duplicates",
+            "workspace_id",
+            "duplicate_status",
+            postgresql_where=text("duplicate_status <> 'NONE'"),
+        ),
+        Index("ix_certificates_values_gin", "values_jsonb", postgresql_using="gin"),
+        Index("ix_certificates_created_at_id", "workspace_id", "created_at", "id"),
+        CheckConstraint("certificate_number_key <> ''", name="certificate_number_is_present"),
+        CheckConstraint(
+            "row_confidence >= 0 AND row_confidence <= 1", name="certificate_confidence_range"
+        ),
+        CheckConstraint("record_version >= 1", name="record_version_is_positive"),
+        CheckConstraint(
+            "duplicate_of_id IS NULL OR duplicate_of_id <> id", name="duplicate_of_is_another_row"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    certificate_type_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificate_types.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    schema_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("schema_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    """The exact schema version this entry was read under.
+
+    ``RESTRICT`` rather than ``SET NULL``: losing it would leave a row whose field
+    names no longer mean anything definite.
+    """
+
+    # --- identifiers -------------------------------------------------------
+    certificate_number: Mapped[str] = mapped_column(String(120), nullable=False)
+    """As printed on the certificate. What a person reads and an export contains."""
+
+    certificate_number_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    """Case, separators and digit script folded away - see
+    :func:`certex.certificates.keys.number_key`. What the index compares."""
+
+    registration_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    registration_number_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # --- who and when ------------------------------------------------------
+    primary_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    """Whose certificate this is, as printed: the subject, or the first party."""
+
+    primary_name_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    secondary_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    """The other party, on a certificate that has two."""
+
+    secondary_name_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    event_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    """The date the certificate is about - the birth, the marriage, the death."""
+
+    event_date_role: Mapped[FieldRole | None] = mapped_column(enum_column(FieldRole), nullable=True)
+    """Which role ``event_date`` came from, so the screen can label it correctly."""
+
+    registration_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    issue_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    issuing_authority: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # --- the row itself ----------------------------------------------------
+    values_jsonb: Mapped[JSONDict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    """Every field of the schema that had a value: field name -> printed value."""
+
+    confidences_jsonb: Mapped[JSONDict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    """field name -> float in [0, 1]. Empty for a typed or imported record."""
+
+    provenance_jsonb: Mapped[JSONDict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    """field name -> where the value came from: method, page, verbatim snippet.
+
+    Kept on the entry rather than only on the extraction, because an entry can
+    outlive the batch it was read from and still has to answer "why does it say
+    that".
+    """
+
+    row_confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, default=1.0, server_default="1.0"
+    )
+    """1.0 for a record a person entered or imported; the read confidence otherwise."""
+
+    # --- lifecycle ---------------------------------------------------------
+    status: Mapped[CertificateStatus] = mapped_column(
+        enum_column(CertificateStatus),
+        nullable=False,
+        default=CertificateStatus.ACTIVE,
+        server_default=CertificateStatus.ACTIVE.value,
+        index=True,
+    )
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    record_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    """Bumped on every accepted change. Entry history is kept separately."""
+
+    # --- duplicates --------------------------------------------------------
+    duplicate_status: Mapped[DuplicateStatus] = mapped_column(
+        enum_column(DuplicateStatus),
+        nullable=False,
+        default=DuplicateStatus.NONE,
+        server_default=DuplicateStatus.NONE.value,
+    )
+    duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("certificates.id", ondelete="SET NULL"), nullable=True
+    )
+    """The entry this one appears to repeat. Never acted on automatically."""
+
+    # --- provenance of the record ------------------------------------------
+    source: Mapped[CertificateSource] = mapped_column(
+        enum_column(CertificateSource), nullable=False, default=CertificateSource.EXTRACTION
+    )
+    source_extraction_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extractions.id", ondelete="SET NULL"), nullable=True
+    )
+    source_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    certificate_type: Mapped[CertificateTypeRecord] = relationship()
+    names: Mapped[list[CertificateName]] = relationship(
+        back_populates="certificate", cascade="all, delete-orphan", passive_deletes=True
+    )
+    dates: Mapped[list[CertificateDate]] = relationship(
+        back_populates="certificate", cascade="all, delete-orphan", passive_deletes=True
+    )
+    documents: Mapped[list[CertificateDocument]] = relationship(
+        back_populates="certificate", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class CertificateName(Base):
+    """One person named on one certificate.
+
+    A row per name rather than a column per name, because how many names a
+    certificate carries is a property of its schema, not of this table: a marriage
+    names two parties and four parents, a custom type might name a guardian. Search
+    by "father's name" is then one indexed join, and it keeps working for a role
+    this file has never seen.
+    """
+
+    __tablename__ = "certificate_names"
+    __table_args__ = (
+        UniqueConstraint(
+            "certificate_id", "field_name", name="uq_certificate_names_certificate_id_field"
+        ),
+        Index("ix_certificate_names_key", "workspace_id", "value_key"),
+        Index("ix_certificate_names_role_key", "workspace_id", "role", "value_key"),
+        Index(
+            "ix_certificate_names_key_trgm",
+            "value_key",
+            postgresql_using="gin",
+            postgresql_ops={"value_key": "gin_trgm_ops"},
+        ),
+        CheckConstraint("value_key <> ''", name="certificate_name_key_is_present"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[FieldRole] = mapped_column(enum_column(FieldRole), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    """Which schema field this name came from. Names the column in the UI."""
+
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """Which occurrence of the role this is, in printed order."""
+
+    value: Mapped[str] = mapped_column(String(300), nullable=False)
+    value_key: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    certificate: Mapped[Certificate] = relationship(back_populates="names")
+
+
+class CertificateDate(Base):
+    """One date printed on one certificate, under the role it was given.
+
+    Same reasoning as :class:`CertificateName`: a marriage certificate prints two
+    dates of birth, and a date-range search has to see both.
+    """
+
+    __tablename__ = "certificate_dates"
+    __table_args__ = (
+        UniqueConstraint(
+            "certificate_id", "field_name", name="uq_certificate_dates_certificate_id_field"
+        ),
+        Index("ix_certificate_dates_role_value", "workspace_id", "role", "value"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[FieldRole] = mapped_column(enum_column(FieldRole), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    value: Mapped[dt.date] = mapped_column(Date, nullable=False)
+
+    certificate: Mapped[Certificate] = relationship(back_populates="dates")
+
+
+class CertificateDocument(Base, TimestampMixin):
+    """The link between a register entry and a stored document.
+
+    A relationship, never a filename. Uploaded names are not trustworthy, are not
+    unique, and change when a clerk re-saves a file; an entry that found its scan by
+    name would eventually show someone else's certificate. The page range is carried
+    here too, because one PDF often holds a hundred certificates and the entry needs
+    to point at its own pages.
+    """
+
+    __tablename__ = "certificate_documents"
+    __table_args__ = (
+        # Two partial indexes rather than one constraint: Postgres treats NULLs as
+        # distinct, so a single UNIQUE over a nullable unit_id would let the same
+        # whole-document link be added twice.
+        Index(
+            "uq_certificate_documents_unit",
+            "certificate_id",
+            "document_id",
+            "unit_id",
+            unique=True,
+            postgresql_where=text("unit_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_certificate_documents_whole",
+            "certificate_id",
+            "document_id",
+            unique=True,
+            postgresql_where=text("unit_id IS NULL"),
+        ),
+        Index("ix_certificate_documents_document_id", "document_id"),
+        CheckConstraint(
+            "page_end IS NULL OR page_start IS NULL OR page_end >= page_start",
+            name="certificate_document_pages_ordered",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="RESTRICT"), nullable=False
+    )
+    """``RESTRICT``: a document an entry cites cannot be deleted out from under it.
+
+    Removing it is a decision about the register, taken through the retention path,
+    not a side effect of tidying up a batch.
+    """
+
+    unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("certificate_units.id", ondelete="SET NULL"), nullable=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[DocumentLinkKind] = mapped_column(
+        enum_column(DocumentLinkKind), nullable=False, default=DocumentLinkKind.PRIMARY
+    )
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linked_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    certificate: Mapped[Certificate] = relationship(back_populates="documents")
+    document: Mapped[Document] = relationship()
 
 
 class Export(Base):

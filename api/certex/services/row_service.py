@@ -33,7 +33,7 @@ from certex.enums import (
     UnitStatus,
     UserRole,
 )
-from certex.fields import fields_for
+from certex.fields import FieldSchema, builtin_schema
 from certex.logging_setup import get_logger
 from certex.pipeline.extract.values import normalize_field_value
 from certex.pipeline.validate.confidence import route_row, score_row
@@ -202,6 +202,17 @@ async def get_row(session: AsyncSession, *, scope: WorkspaceScope, row_id: uuid.
     return record
 
 
+def _schema_of(row: Extraction) -> FieldSchema:
+    """The fields a stored row should be read against.
+
+    Rows carry their certificate type; a batch may also pin a schema version. The
+    pinned version is threaded in by the caller where it matters - here the
+    built-in definition is the safe default, because a row's own keys are what
+    actually decide what is displayed.
+    """
+    return builtin_schema(row.certificate_type)
+
+
 def to_summary(record: RowRecord) -> RowSummary:
     row = record.extraction
     return RowSummary(
@@ -245,7 +256,7 @@ def to_detail(record: RowRecord) -> RowDetail:
         by_field.setdefault(issue.get("field", ""), []).append(issue)
 
     values: list[FieldValue] = []
-    for spec in fields_for(row.certificate_type):
+    for spec in _schema_of(row).fields:
         source = row.field_sources_jsonb.get(spec.name)
         source_map = source if isinstance(source, dict) else {}
         field_issues = by_field.get(spec.name, [])
@@ -306,7 +317,7 @@ async def correct_row(
     record = await get_row(session, scope=scope, row_id=row_id)
     row = record.extraction
 
-    known = {spec.name: spec for spec in fields_for(row.certificate_type)}
+    known = _schema_of(row).by_name
     edits = correction.cleaned()
     unknown = sorted(set(edits) - set(known) - set(row.extra_fields_jsonb))
     if unknown:

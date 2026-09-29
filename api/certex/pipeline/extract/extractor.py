@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from certex.enums import CertificateType, ExtractionMethod
-from certex.fields import fields_for
+from certex.fields import FieldSchema, schema_or_builtin
 from certex.pipeline.extract.candidates import Candidate
 from certex.pipeline.extract.merge import merge_candidates
 from certex.pipeline.extract.rules import UnitPage, extract_extra_fields, extract_with_rules
@@ -45,11 +45,9 @@ class ExtractedFields:
         return candidate.value if candidate else None
 
 
-def _normalise(
-    candidates: dict[str, Candidate], certificate_type: CertificateType
-) -> dict[str, Candidate]:
+def _normalise(candidates: dict[str, Candidate], schema: FieldSchema) -> dict[str, Candidate]:
     """Rewrite each value in the canonical form its field kind calls for."""
-    specs = {spec.name: spec for spec in fields_for(certificate_type)}
+    specs = schema.by_name
     normalised: dict[str, Candidate] = {}
     for name, candidate in candidates.items():
         spec = specs.get(name)
@@ -72,12 +70,18 @@ def extract_fields(
     *,
     certificate_type: CertificateType,
     template_rules: TemplateRules | None = None,
+    schema: FieldSchema | None = None,
 ) -> ExtractedFields:
-    """Read every field of a certificate, and anything else it labels."""
+    """Read every field of a certificate, and anything else it labels.
+
+    ``schema`` is the version the batch was created under. Without one the
+    built-in definition for the classified type is used instead.
+    """
+    active = schema_or_builtin(certificate_type, schema)
     template_layer = apply_template(pages, template_rules) if template_rules else {}
-    rules_layer = extract_with_rules(pages, certificate_type=certificate_type)
-    merged = _normalise(merge_candidates(template_layer, rules_layer), certificate_type)
+    rules_layer = extract_with_rules(pages, certificate_type=certificate_type, schema=active)
+    merged = _normalise(merge_candidates(template_layer, rules_layer), active)
     return ExtractedFields(
         fields=merged,
-        extras=extract_extra_fields(pages, certificate_type=certificate_type),
+        extras=extract_extra_fields(pages, certificate_type=certificate_type, schema=active),
     )

@@ -25,6 +25,7 @@ from certex.logging_setup import get_logger
 from certex.pipeline.dispatch import TASK_FINALIZE_DOCUMENT, Dispatch, enqueue
 from certex.pipeline.validate.confidence import route_row, score_row
 from certex.pipeline.validate.rules import RowFacts, validate_row
+from certex.services.schema_service import schema_for_batch_sync
 
 __all__ = ["ValidateStageResult", "run_validate_unit_stage"]
 
@@ -80,9 +81,12 @@ def run_validate_unit_stage(
         }
         methods = {name: str(value) for name, value in row.field_methods_jsonb.items()}
 
+        schema = schema_for_batch_sync(session, unit.batch_id)
+
         outcome = validate_row(
             RowFacts(
                 certificate_type=row.certificate_type,
+                field_schema=schema,
                 values=values,
                 printed=_printed_values(dict(row.field_sources_jsonb)),
                 field_confidences=confidences,
@@ -100,6 +104,7 @@ def run_validate_unit_stage(
             field_methods=methods,
             outcome=outcome,
             type_confidence=unit.type_confidence,
+            schema=schema,
         )
         status = route_row(
             confidence=confidence,

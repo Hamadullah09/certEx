@@ -35,6 +35,7 @@ __all__ = [
     "read_date",
     "read_sex",
     "read_time",
+    "to_western_digits",
 ]
 
 _DATE_SETTINGS: Final[dict[str, object]] = {
@@ -81,13 +82,14 @@ class DateReading:
     """It looks like a date and is not one: the 31st of February."""
 
 
-def _to_western_digits(text: str) -> str:
+def to_western_digits(text: str) -> str:
+    """Fold Urdu and Arabic-Indic digits to 0-9, leaving everything else alone."""
     return text.translate(_EASTERN_DIGITS)
 
 
 def read_date(raw: str, *, today: dt.date | None = None) -> DateReading:
     """Read a printed date into ISO 8601, saying whether the reading is ambiguous."""
-    text = _to_western_digits(normalize_text(raw)).strip()
+    text = to_western_digits(normalize_text(raw)).strip()
     if not text:
         return DateReading(iso=None)
 
@@ -134,7 +136,7 @@ def _read_numeric_date(
 
 def read_time(raw: str) -> str | None:
     """A printed time as 24-hour HH:MM."""
-    text = _to_western_digits(normalize_text(raw))
+    text = to_western_digits(normalize_text(raw))
     match = _TIME.search(text)
     if match is None:
         return None
@@ -167,7 +169,7 @@ def read_sex(raw: str) -> str | None:
 
 def format_cnic(raw: str) -> str | None:
     """A Pakistani identity number as 12345-1234567-1, when the digits allow it."""
-    text = _to_western_digits(normalize_text(raw))
+    text = to_western_digits(normalize_text(raw))
     if _CNIC_SHAPE.match(text.strip()):
         return text.strip()
     digits = "".join(_CNIC_DIGITS.findall(text))
@@ -178,7 +180,7 @@ def format_cnic(raw: str) -> str | None:
 
 def _read_number(raw: str) -> str | None:
     """The quantity out of "PKR 500,000" or "73 years"."""
-    text = _to_western_digits(normalize_text(raw))
+    text = to_western_digits(normalize_text(raw))
     match = _NUMBER.search(text)
     if match is None:
         return None

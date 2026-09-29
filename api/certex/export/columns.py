@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from certex.enums import CertificateType
-from certex.fields import FieldSpec, common_fields, fields_for
+from certex.fields import FieldSchema, FieldSpec, common_fields, fields_for
 
 __all__ = [
     "CONFIDENCE_SUFFIX",
@@ -117,12 +117,19 @@ def _field_columns(
 def build_column_plan(
     certificate_types: Iterable[CertificateType],
     *,
+    schemas: Iterable[FieldSchema] = (),
     extra_field_names: Iterable[str] = (),
     include_confidence: bool = False,
     include_snippet: bool = False,
 ) -> ColumnPlan:
-    """The columns for a set of certificate types present in the export."""
+    """The columns for the schemas and certificate types present in the export.
+
+    ``schemas`` takes precedence: when an export covers batches that pinned schema
+    versions, those exact fields become the columns. ``certificate_types`` is the
+    fallback for rows read before schemas existed.
+    """
     present = list(dict.fromkeys(certificate_types))
+    explicit = list(schemas)
     columns: list[Column] = [
         Column(key=SERIAL_COLUMN, header="Serial no", kind="context"),
         Column(key=TYPE_COLUMN, header="Certificate type", kind="context"),
@@ -130,9 +137,20 @@ def build_column_plan(
 
     seen: set[str] = set()
     ordered_specs: list[FieldSpec] = []
-    for spec in common_fields():
-        ordered_specs.append(spec)
-        seen.add(spec.name)
+
+    if explicit:
+        # Operator-defined schemas decide their own column order, including
+        # whether they carry the common fields at all.
+        for schema in explicit:
+            for spec in schema.fields:
+                if spec.name in seen:
+                    continue
+                ordered_specs.append(spec)
+                seen.add(spec.name)
+    else:
+        for spec in common_fields():
+            ordered_specs.append(spec)
+            seen.add(spec.name)
     # Types in a fixed order, so two exports of the same batch have the same columns
     # whatever order the rows happened to arrive in.
     for certificate_type in sorted(present, key=lambda item: item.value):

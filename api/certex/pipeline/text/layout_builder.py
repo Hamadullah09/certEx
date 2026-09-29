@@ -20,7 +20,9 @@ Rules that matter for certificates:
   whole engine runs. Where the engine supplies logical order inside a run (MuPDF,
   Tesseract), that order is kept.
 * **Spaces follow the page.** Words are joined with a space only where there is a
-  visible gap, so "42" followed by an Urdu comma stays "42،".
+  visible gap, so "42" followed by an Urdu comma stays "42،". What counts as a gap is
+  scaled to the words either side of it, not to the tallest thing on the line, because
+  a form line mixes an 8pt label with 12pt Urdu and one threshold cannot serve both.
 """
 
 from __future__ import annotations
@@ -53,8 +55,15 @@ _BLOCK_GAP_FACTOR = 1.6
 _COLUMN_GAP_FACTOR = 3.0
 """A horizontal gap wider than this many line heights separates two columns."""
 
-_SPACE_GAP_FACTOR = 0.15
-"""A horizontal gap wider than this share of the line height is a word space."""
+_SPACE_GAP_FACTOR = 0.08
+"""A horizontal gap wider than this share of a word's own height is a word space.
+
+Measured against the shorter of the two words rather than against the line, because
+a form line mixes sizes: an 8pt English label beside 12pt Urdu, or a heading beside
+body text. A threshold taken from the tallest thing on the line is wider than the
+space between the shortest two, and the space then disappears - which is how
+"Certificate No." becomes "CertificateNo." and two Urdu words become one.
+"""
 
 Direction = Literal["ltr", "rtl", "neutral"]
 
@@ -117,24 +126,32 @@ class _Run:
 
 
 def join_with_gaps(
-    pieces: Sequence[tuple[str, float, float]], *, line_height: float
+    pieces: Sequence[tuple[str, float, float, float]], *, line_height: float
 ) -> tuple[str, list[tuple[int, int]]]:
     """Join words into a line, and say where each one landed.
 
-    A space is inserted only where the page has a visible gap, so "42" followed
-    immediately by an Urdu comma stays "42،" while two words a space apart stay apart.
+    Each piece is ``(text, x0, x1, height)``. A space is inserted only where the page
+    has a visible gap, so "42" followed immediately by an Urdu comma stays "42،" while
+    two words a space apart stay apart. The gap that counts as a space is scaled to the
+    shorter of the two words, so a mixed-size form line does not lose the spaces
+    between its smaller words; ``line_height`` stands in for a piece whose own height
+    is unknown.
+
     Returns the joined text and, for each input word in order, the (start, end) offsets
     it occupies - which is how the rules engine finds the value that follows a label.
     """
     text_parts: list[str] = []
     spans: list[tuple[int, int]] = []
     cursor = 0
-    threshold = _SPACE_GAP_FACTOR * line_height
-    for index, (word, x0, x1) in enumerate(pieces):
+    for index, (word, x0, x1, height) in enumerate(pieces):
         if index:
-            previous = pieces[index - 1]
-            gap = max(x0 - previous[2], previous[1] - x1, 0.0)
-            if gap > threshold:
+            _, previous_x0, previous_x1, previous_height = pieces[index - 1]
+            gap = max(x0 - previous_x1, previous_x0 - x1, 0.0)
+            scale = min(
+                height if height > 0 else line_height,
+                previous_height if previous_height > 0 else line_height,
+            )
+            if gap > _SPACE_GAP_FACTOR * scale:
                 text_parts.append(" ")
                 cursor += 1
         spans.append((cursor, cursor + len(word)))
@@ -272,7 +289,7 @@ def _read_line(draft: _LineDraft, *, engine_order: bool) -> tuple[list[Positione
         if not column_words:
             continue
         column_text, _spans = join_with_gaps(
-            [(word.text, word.x0, word.x1) for word in column_words],
+            [(word.text, word.x0, word.x1, word.y1 - word.y0) for word in column_words],
             line_height=line_height,
         )
         text_parts.append(column_text)

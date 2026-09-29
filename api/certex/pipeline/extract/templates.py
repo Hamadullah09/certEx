@@ -94,7 +94,7 @@ def _line_text_with_spans(layout: PageLayout, line_index: int) -> tuple[str, lis
     line = layout.lines[line_index]
     words = [layout.words[index] for index in line.words if index < len(layout.words)]
     return join_with_gaps(
-        [(word.text, word.bbox.x0, word.bbox.x1) for word in words],
+        [(word.text, word.bbox.x0, word.bbox.x1, word.bbox.height) for word in words],
         line_height=max(line.bbox.height, 1e-6),
     )
 

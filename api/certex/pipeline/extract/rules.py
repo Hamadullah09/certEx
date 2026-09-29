@@ -51,7 +51,7 @@ from typing import Final
 from rapidfuzz import fuzz
 
 from certex.enums import CertificateType, ExtractionMethod
-from certex.fields import FieldKind, FieldSpec, fields_for
+from certex.fields import FieldKind, FieldSchema, FieldSpec, schema_or_builtin
 from certex.pipeline.extract.candidates import Candidate, FieldSource
 from certex.pipeline.text.layout_builder import join_with_gaps
 from certex.pipeline.text.normalize import arabic_script_ratio, normalize_text
@@ -159,7 +159,7 @@ def _index_lines(layout: PageLayout) -> list[_LineIndex]:
         if not words:
             continue
         text, spans = join_with_gaps(
-            [(word.text, word.bbox.x0, word.bbox.x1) for word in words],
+            [(word.text, word.bbox.x0, word.bbox.x1, word.bbox.height) for word in words],
             line_height=max(line.bbox.height, 1e-6),
         )
         indexed.append(_LineIndex(line=line, words=words, text=text, spans=spans))
@@ -454,10 +454,13 @@ def _search_page(page: UnitPage, spec: FieldSpec, specs: Sequence[FieldSpec]) ->
 
 
 def extract_with_rules(
-    pages: Sequence[UnitPage], *, certificate_type: CertificateType
+    pages: Sequence[UnitPage],
+    *,
+    certificate_type: CertificateType,
+    schema: FieldSchema | None = None,
 ) -> dict[str, Candidate]:
-    """Read every field of a certificate type off the unit's pages."""
-    specs = fields_for(certificate_type)
+    """Read every field of a schema off the unit's pages."""
+    specs = schema_or_builtin(certificate_type, schema).fields
     found: dict[str, Candidate] = {}
     for spec in specs:
         for page in pages:
@@ -471,7 +474,10 @@ def extract_with_rules(
 
 
 def extract_extra_fields(
-    pages: Sequence[UnitPage], *, certificate_type: CertificateType
+    pages: Sequence[UnitPage],
+    *,
+    certificate_type: CertificateType,
+    schema: FieldSchema | None = None,
 ) -> dict[str, Candidate]:
     """Labelled values the schema has no field for.
 
@@ -479,7 +485,7 @@ def extract_extra_fields(
     because this system has never heard of it. These are exported in their own columns
     rather than being silently dropped.
     """
-    specs = fields_for(certificate_type)
+    specs = schema_or_builtin(certificate_type, schema).fields
     known = {synonym.lower() for spec in specs for synonym in spec.synonyms if synonym}
     extras: dict[str, Candidate] = {}
 

@@ -19,9 +19,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from certex import __version__
 from certex.api.v1 import auth as auth_routes
 from certex.api.v1 import batches as batch_routes
+from certex.api.v1 import certificates as certificate_routes
 from certex.api.v1 import exports as export_routes
 from certex.api.v1 import health as health_routes
 from certex.api.v1 import progress as progress_routes
+from certex.api.v1 import registry as registry_routes
 from certex.api.v1 import rows as row_routes
 from certex.api.v1 import units as unit_routes
 from certex.config import Settings, get_settings
@@ -92,6 +94,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness probes."},
             {"name": "auth", "description": "Session lifecycle."},
+            {
+                "name": "registry",
+                "description": "Certificate types and the schemas that define their fields.",
+            },
+            {
+                "name": "certificates",
+                "description": (
+                    "The register itself: entries, the documents behind them, and "
+                    "the duplicates they raise."
+                ),
+            },
             {
                 "name": "batches",
                 "description": "Create batches, upload documents, inspect progress.",
@@ -212,6 +225,8 @@ def _register_routes(application: FastAPI) -> None:
     application.include_router(health_routes.router, prefix=f"{API_V1_PREFIX}/health")
     application.include_router(auth_routes.router, prefix=API_V1_PREFIX)
     application.include_router(batch_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(registry_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(certificate_routes.router, prefix=API_V1_PREFIX)
     application.include_router(unit_routes.router, prefix=API_V1_PREFIX)
     application.include_router(row_routes.router, prefix=API_V1_PREFIX)
     application.include_router(progress_routes.router, prefix=API_V1_PREFIX)

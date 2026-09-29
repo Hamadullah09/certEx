@@ -36,6 +36,7 @@ from certex.pipeline.extract.templates import fingerprint_pages
 from certex.schemas.layout import PageLayout
 from certex.schemas.template import TemplateRules
 from certex.services.row_service import manual_fields
+from certex.services.schema_service import schema_for_batch_sync
 
 __all__ = ["ExtractStageResult", "run_extract_unit_stage"]
 
@@ -222,10 +223,16 @@ def run_extract_unit_stage(
         if match is not None:
             template_id, template_rules = match
 
+    # The batch pinned the schema when it was created, so re-running this stage
+    # months later reads the same fields it read the first time.
+    with session_scope() as session:
+        schema = schema_for_batch_sync(session, data.batch_id)
+
     extracted = extract_fields(
         data.pages,
         certificate_type=data.certificate_type,
         template_rules=template_rules,
+        schema=schema,
     )
     if not _write_row(
         unit_id,

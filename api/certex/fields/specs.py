@@ -24,7 +24,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from certex.enums import CertificateType
+from certex.enums import CertificateType, FieldRole
 
 __all__ = [
     "FIELD_SCHEMA_VERSION",
@@ -60,7 +60,7 @@ class FieldKind(str, enum.Enum):
 
 
 class FieldSpec(BaseModel):
-    """One field of one certificate type."""
+    """One field of one certificate schema."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -72,10 +72,24 @@ class FieldSpec(BaseModel):
     labels_ur: tuple[str, ...] = ()
     description: str | None = None
 
+    role: FieldRole = FieldRole.NONE
+    """What the field means. Lets generic code apply semantic rules - see FieldRole."""
+
+    searchable: bool = False
+    """Indexed for search. Only role-bearing fields can be, since search columns
+    are role-mapped; a searchable field with no role is a schema-builder mistake."""
+
+    unique: bool = False
+    """Duplicate values are a conflict to be resolved, not silently accepted."""
+
     @property
     def synonyms(self) -> tuple[str, ...]:
         """Every printed label this field answers to."""
         return (self.label, *self.labels_en, *self.labels_ur)
+
+    @property
+    def is_identifier(self) -> bool:
+        return self.role is FieldRole.IDENTIFIER
 
 
 def _spec(
@@ -87,6 +101,9 @@ def _spec(
     en: tuple[str, ...] = (),
     ur: tuple[str, ...] = (),
     description: str | None = None,
+    role: FieldRole = FieldRole.NONE,
+    searchable: bool | None = None,
+    unique: bool = False,
 ) -> FieldSpec:
     return FieldSpec(
         name=name,
@@ -96,6 +113,11 @@ def _spec(
         labels_en=en,
         labels_ur=ur,
         description=description,
+        role=role,
+        # A role-bearing field is worth searching on by default; that is most of
+        # what a role is for.
+        searchable=(role is not FieldRole.NONE) if searchable is None else searchable,
+        unique=unique,
     )
 
 
@@ -111,6 +133,8 @@ _COMMON: Final[tuple[FieldSpec, ...]] = (
         en=("certificate no", "certificate number", "cert no", "certificate #", "serial no"),
         ur=("سرٹیفکیٹ نمبر", "سند نمبر"),
         description="The number printed on the certificate itself.",
+        role=FieldRole.IDENTIFIER,
+        unique=True,
     ),
     _spec(
         "registration_number",
@@ -119,6 +143,7 @@ _COMMON: Final[tuple[FieldSpec, ...]] = (
         en=("registration no", "registration number", "reg no", "record no", "entry no"),
         ur=("رجسٹریشن نمبر", "اندراج نمبر"),
         description="The number of the entry in the register, where it differs.",
+        role=FieldRole.SECONDARY_REFERENCE,
     ),
     _spec(
         "registration_date",
@@ -126,6 +151,7 @@ _COMMON: Final[tuple[FieldSpec, ...]] = (
         FieldKind.DATE,
         en=("date of registration", "registration date", "registered on", "date of entry"),
         ur=("تاریخ اندراج", "تاریخ رجسٹریشن"),
+        role=FieldRole.REGISTRATION_DATE,
     ),
     _spec(
         "issuing_authority",
@@ -133,6 +159,7 @@ _COMMON: Final[tuple[FieldSpec, ...]] = (
         FieldKind.TEXT,
         en=("issuing authority", "issued by", "union council", "local government", "authority"),
         ur=("جاری کنندہ", "یونین کونسل", "ادارہ"),
+        role=FieldRole.ISSUING_AUTHORITY,
     ),
     _spec(
         "registrar_name",
@@ -147,6 +174,7 @@ _COMMON: Final[tuple[FieldSpec, ...]] = (
         FieldKind.DATE,
         en=("date of issue", "issue date", "issued on", "date issued"),
         ur=("تاریخ اجرا", "تاریخ جاری"),
+        role=FieldRole.ISSUE_DATE,
     ),
 )
 
@@ -161,14 +189,9 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("name of child", "child's name", "child name", "name", "full name"),
         ur=("بچے کا نام", "نام بچہ", "نام"),
+        role=FieldRole.SUBJECT_NAME,
     ),
-    _spec(
-        "sex",
-        "Sex",
-        FieldKind.SEX,
-        en=("sex", "gender"),
-        ur=("جنس",),
-    ),
+    _spec("sex", "Sex", FieldKind.SEX, en=("sex", "gender"), ur=("جنس",), role=FieldRole.SEX),
     _spec(
         "date_of_birth",
         "Date of birth",
@@ -176,6 +199,7 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("date of birth", "birth date", "dob", "born on"),
         ur=("تاریخ پیدائش", "تاریخ ولادت"),
+        role=FieldRole.BIRTH_DATE,
     ),
     _spec(
         "time_of_birth",
@@ -190,6 +214,7 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.TEXT,
         en=("place of birth", "birth place", "hospital", "place"),
         ur=("جائے پیدائش", "مقام پیدائش"),
+        role=FieldRole.PLACE,
     ),
     _spec(
         "father_full_name",
@@ -197,6 +222,7 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("father's name", "fathers name", "name of father", "father"),
         ur=("والد کا نام", "نام والد", "ولدیت"),
+        role=FieldRole.FATHER_NAME,
     ),
     _spec(
         "father_id_number",
@@ -211,6 +237,7 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("mother's name", "mothers name", "name of mother", "mother"),
         ur=("والدہ کا نام", "نام والدہ"),
+        role=FieldRole.MOTHER_NAME,
     ),
     _spec(
         "mother_id_number",
@@ -225,6 +252,7 @@ _BIRTH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.ADDRESS,
         en=("permanent address", "address", "residence", "home address"),
         ur=("مستقل پتہ", "پتہ", "رہائش"),
+        role=FieldRole.ADDRESS,
     ),
     _spec(
         "informant_name",
@@ -246,20 +274,16 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("name of deceased", "deceased name", "deceased's name", "name", "full name"),
         ur=("متوفی کا نام", "نام متوفی", "نام"),
+        role=FieldRole.SUBJECT_NAME,
     ),
-    _spec(
-        "sex",
-        "Sex",
-        FieldKind.SEX,
-        en=("sex", "gender"),
-        ur=("جنس",),
-    ),
+    _spec("sex", "Sex", FieldKind.SEX, en=("sex", "gender"), ur=("جنس",), role=FieldRole.SEX),
     _spec(
         "date_of_birth",
         "Date of birth",
         FieldKind.DATE,
         en=("date of birth", "birth date", "dob"),
         ur=("تاریخ پیدائش",),
+        role=FieldRole.BIRTH_DATE,
     ),
     _spec(
         "date_of_death",
@@ -268,6 +292,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("date of death", "death date", "died on", "dod"),
         ur=("تاریخ وفات", "تاریخ موت"),
+        role=FieldRole.DEATH_DATE,
     ),
     _spec(
         "age_at_death",
@@ -275,6 +300,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NUMBER,
         en=("age at death", "age", "age of deceased"),
         ur=("عمر", "عمر بوقت وفات"),
+        role=FieldRole.AGE,
     ),
     _spec(
         "place_of_death",
@@ -282,6 +308,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.TEXT,
         en=("place of death", "death place", "hospital", "place"),
         ur=("جائے وفات", "مقام وفات"),
+        role=FieldRole.PLACE,
     ),
     _spec(
         "cause_of_death",
@@ -296,6 +323,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("father's name", "fathers name", "name of father", "father"),
         ur=("والد کا نام", "ولدیت"),
+        role=FieldRole.FATHER_NAME,
     ),
     _spec(
         "spouse_name",
@@ -303,6 +331,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("spouse's name", "spouse name", "husband's name", "wife's name", "spouse"),
         ur=("شریک حیات کا نام", "خاوند کا نام", "بیوی کا نام"),
+        role=FieldRole.SPOUSE_NAME,
     ),
     _spec(
         "deceased_id_number",
@@ -317,6 +346,7 @@ _DEATH: Final[tuple[FieldSpec, ...]] = (
         FieldKind.ADDRESS,
         en=("permanent address", "address", "residence"),
         ur=("مستقل پتہ", "پتہ"),
+        role=FieldRole.ADDRESS,
     ),
     _spec(
         "informant_name",
@@ -338,6 +368,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("date of marriage", "marriage date", "date of nikah", "married on"),
         ur=("تاریخ نکاح", "تاریخ شادی"),
+        role=FieldRole.MARRIAGE_DATE,
     ),
     _spec(
         "place_of_marriage",
@@ -345,6 +376,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         FieldKind.TEXT,
         en=("place of marriage", "marriage place", "place of nikah", "venue"),
         ur=("جائے نکاح", "مقام نکاح"),
+        role=FieldRole.PLACE,
     ),
     _spec(
         "groom_full_name",
@@ -353,6 +385,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("groom's name", "grooms name", "name of groom", "bridegroom", "husband's name"),
         ur=("دولہا کا نام", "نام دولہا", "خاوند کا نام"),
+        role=FieldRole.PARTY_NAME,
     ),
     _spec(
         "groom_date_of_birth",
@@ -360,6 +393,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         FieldKind.DATE,
         en=("groom's date of birth", "groom date of birth", "groom's dob", "groom's age"),
         ur=("دولہا کی تاریخ پیدائش",),
+        role=FieldRole.BIRTH_DATE,
     ),
     _spec(
         "groom_id_number",
@@ -374,6 +408,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("groom's father", "grooms father", "father of groom", "groom's father's name"),
         ur=("دولہا کے والد کا نام", "ولدیت دولہا"),
+        role=FieldRole.FATHER_NAME,
     ),
     _spec(
         "bride_full_name",
@@ -382,6 +417,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         required=True,
         en=("bride's name", "brides name", "name of bride", "wife's name"),
         ur=("دلہن کا نام", "نام دلہن", "بیوی کا نام"),
+        role=FieldRole.PARTY_NAME,
     ),
     _spec(
         "bride_date_of_birth",
@@ -389,6 +425,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         FieldKind.DATE,
         en=("bride's date of birth", "bride date of birth", "bride's dob", "bride's age"),
         ur=("دلہن کی تاریخ پیدائش",),
+        role=FieldRole.BIRTH_DATE,
     ),
     _spec(
         "bride_id_number",
@@ -403,6 +440,7 @@ _MARRIAGE: Final[tuple[FieldSpec, ...]] = (
         FieldKind.NAME,
         en=("bride's father", "brides father", "father of bride", "bride's father's name"),
         ur=("دلہن کے والد کا نام", "ولدیت دلہن"),
+        role=FieldRole.FATHER_NAME,
     ),
     _spec(
         "dower_amount",
