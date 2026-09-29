@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FileStack, LayoutTemplate, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { BookOpen, FileStack, LayoutTemplate, LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
 import { Button } from "@/components/ui/button";
@@ -93,10 +93,13 @@ export function AppShell({
             <span>{appName}</span>
           </Link>
 
-          {/* Plain words, and links rather than icons alone: the three places this
-              app goes have to be readable at a glance from across a desk. */}
+          {/* Plain words, and links rather than icons alone: the places this app
+              goes have to be readable at a glance from across a desk. The register
+              comes first because looking a certificate up is what happens all day;
+              uploading a batch of scans happens once a week. */}
           <nav aria-label="Main" className="order-3 flex items-center gap-1 sm:order-none">
             {[
+              { href: "/register", label: "Register", Icon: BookOpen },
               { href: "/", label: "Batches", Icon: FileStack },
               { href: "/templates", label: "Templates", Icon: LayoutTemplate },
               { href: "/settings", label: "Settings", Icon: Settings },

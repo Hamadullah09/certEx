@@ -14,19 +14,21 @@ than left to the caller:
 from __future__ import annotations
 
 import datetime as dt
+import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, WorkspaceScopeDep
 from certex.core.errors import BadRequestError, NotFoundError, ValidationFailedError
-from certex.db.models import Certificate, CertificateTypeRecord, Document
+from certex.db.models import Certificate, CertificateDocument, CertificateTypeRecord, Document
 from certex.enums import AuditAction, CertificateSource, CertificateType, UserRole
 from certex.export.columns import Column, ColumnPlan
 from certex.export.rows import ExportRow
@@ -42,7 +44,9 @@ from certex.schemas.certificates import (
     DuplicateCandidate,
 )
 from certex.schemas.common import Cursor, Page
-from certex.services import certificate_service, schema_service
+from certex.schemas.search import SearchHitOut, SearchResponse
+from certex.services import certificate_service, schema_service, search_service
+from certex.storage.s3 import get_object_storage
 
 __all__ = ["router"]
 
@@ -54,6 +58,29 @@ LimitParam = Annotated[int, Query(ge=1, le=200, description="Maximum entries to 
 
 _EXPORT_PAGE = 500
 """Entries per database round trip while streaming an export."""
+
+_DOWNLOAD_CHUNK = 256 * 1024
+"""Bytes per block when streaming a scan back to the browser."""
+
+_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+_EXTENSIONS: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/tiff": ".tif",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+}
+
+
+def _extension_for(mime_type: str) -> str:
+    """A suffix a browser and an operating system will both recognise.
+
+    From a fixed table rather than from the uploaded name, which is not trustworthy,
+    and rather than from mimetypes.guess_extension, which answers ".jpe" for a JPEG.
+    """
+    return _EXTENSIONS.get(mime_type, "")
 
 
 def _detail(certificate: Certificate) -> CertificateDetail:
@@ -254,6 +281,74 @@ async def export_register(
 
 
 @router.get(
+    "/search",
+    response_model=SearchResponse,
+    summary="Find a certificate by number or by name",
+)
+async def search_certificates(
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    q: Annotated[
+        str | None,
+        Query(
+            max_length=200,
+            description=(
+                "A certificate number, part of one, or a name. Numbers are matched "
+                "first, exactly and then by prefix; names exactly and then by "
+                "similarity."
+            ),
+        ),
+    ] = None,
+    certificate_type_id: Annotated[uuid.UUID | None, Query()] = None,
+    name: Annotated[str | None, Query(max_length=200, description="Anyone named.")] = None,
+    father_name: Annotated[str | None, Query(max_length=200)] = None,
+    event_date_from: Annotated[dt.date | None, Query()] = None,
+    event_date_to: Annotated[dt.date | None, Query()] = None,
+    needs_review: Annotated[bool | None, Query()] = None,
+    duplicates_only: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0, le=search_service.MAX_OFFSET)] = 0,
+) -> SearchResponse:
+    """Answers in tiers and says which tier answered.
+
+    The tier is what lets the screen be honest: "no certificate with that number, but
+    here are three people with that name" is a different answer from "here is the
+    certificate", and a clerk needs to know which one they are looking at.
+    """
+    results = await search_service.search(
+        session,
+        workspace_id=scope.workspace_id,
+        query=search_service.SearchQuery(
+            text=q,
+            certificate_type_id=certificate_type_id,
+            name=name,
+            father_name=father_name,
+            event_date_from=event_date_from,
+            event_date_to=event_date_to,
+            needs_review=needs_review,
+            duplicates_only=duplicates_only,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+    return SearchResponse(
+        items=[
+            SearchHitOut(
+                certificate=CertificateSummary.model_validate(hit.certificate),
+                match=hit.kind,
+                same_name_count=hit.same_name_count,
+            )
+            for hit in results.hits
+        ],
+        match=results.kind,
+        total=results.total,
+        limit=results.limit,
+        offset=results.offset,
+        has_more=results.has_more,
+    )
+
+
+@router.get(
     "/{certificate_id}",
     response_model=CertificateDetail,
     summary="One entry in full",
@@ -443,3 +538,83 @@ async def link_document(
     )
     await session.commit()
     return DocumentLink.model_validate(link)
+
+
+@router.get(
+    "/{certificate_id}/documents/{link_id}/content",
+    response_class=StreamingResponse,
+    summary="The scan behind an entry",
+    responses={
+        200: {"content": {"application/pdf": {}}},
+        404: {"description": "No such entry, or no such document attached to it."},
+    },
+)
+async def get_document_content(
+    certificate_id: uuid.UUID,
+    link_id: uuid.UUID,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> StreamingResponse:
+    """Served through the API, never from a public URL.
+
+    The bucket is private and stays private: a link that works without a session is a
+    link that works for whoever finds it, and these are identity documents. So the
+    bytes are streamed through this route, which checks the session, checks that the
+    document is attached to an entry in *this* workspace, and records who looked.
+
+    ``inline`` rather than ``attachment``: a clerk comparing a scan against a typed
+    value wants it in the viewer beside the form, not in their downloads folder.
+    """
+    certificate = await certificate_service.get_certificate(
+        session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+    )
+    link = await session.scalar(
+        select(CertificateDocument).where(
+            CertificateDocument.id == link_id,
+            CertificateDocument.certificate_id == certificate.id,
+            CertificateDocument.workspace_id == scope.workspace_id,
+        )
+    )
+    if link is None:
+        raise NotFoundError("That document is not attached to this certificate.")
+
+    document = await session.get(Document, link.document_id)
+    if document is None or document.workspace_id != scope.workspace_id:
+        raise NotFoundError("The document behind this entry is no longer available.")
+
+    await record_audit(
+        session,
+        AuditAction.CERTIFICATE_DOCUMENT_VIEWED,
+        audit,
+        entity_type="certificate",
+        entity_id=certificate.id,
+    )
+    await session.commit()
+
+    body = get_object_storage().download_stream(document.storage_key)
+
+    def chunks() -> Iterator[bytes]:
+        """Streamed in blocks: a scanned register can be tens of megabytes."""
+        try:
+            while block := body.read(_DOWNLOAD_CHUNK):
+                yield block
+        finally:
+            body.close()
+
+    # The stored filename is what someone uploaded, so it is not used to name the
+    # download. The certificate number is, which is also what a clerk would call it.
+    safe_number = _FILENAME_UNSAFE.sub("-", certificate.certificate_number).strip("-_.")
+    filename = f"{safe_number or 'certificate'}{_extension_for(document.mime_type)}"
+    return StreamingResponse(
+        chunks(),
+        media_type=document.mime_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Content-Length": str(document.byte_size),
+            # Private: this is somebody's identity document, and a shared cache
+            # holding it would serve it to the next person through the proxy.
+            "Cache-Control": "private, max-age=0, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
