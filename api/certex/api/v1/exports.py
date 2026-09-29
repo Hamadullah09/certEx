@@ -19,7 +19,14 @@ from certex.db.models import Batch
 from certex.enums import AuditAction, CertificateType, ExportFormat, ReviewStatus
 from certex.export.columns import build_column_plan
 from certex.export.rows import render_row
-from certex.export.writers import DELIMITERS, write_csv, write_json, write_xlsx
+from certex.export.writers import (
+    DELIMITERS,
+    write_csv,
+    write_csv_stream,
+    write_json,
+    write_json_stream,
+    write_xlsx,
+)
 from certex.logging_setup import get_logger
 from certex.schemas.exports import ExportPreview
 from certex.services import batch_service, export_service, row_service
@@ -191,18 +198,21 @@ async def export_batch(
         payload = write_xlsx(plan.columns, rows)
         return Response(content=payload, media_type=_MEDIA_TYPES[export_format], headers=headers)
 
-    async def chunks() -> AsyncIterator[str]:
+    def chunks() -> AsyncIterator[str]:
+        """Rows go straight from the database into the response.
+
+        Nothing is collected first: a batch can hold hundreds of thousands of rows,
+        and materialising them to hand to the synchronous writer would hold the lot
+        in memory for the length of the download.
+        """
         rows = export_service.stream_rows(
             session, scope=scope, batch_id=batch_id, plan=plan, filters=filters
         )
-        collected = [row async for row in rows]
-        writer = (
-            write_csv(plan.columns, collected, delimiter=separator, include_bom=include_bom)
-            if export_format is ExportFormat.CSV
-            else write_json(plan.columns, collected)
-        )
-        for chunk in writer:
-            yield chunk
+        if export_format is ExportFormat.CSV:
+            return write_csv_stream(
+                plan.columns, rows, delimiter=separator, include_bom=include_bom
+            )
+        return write_json_stream(plan.columns, rows)
 
     return StreamingResponse(chunks(), media_type=_MEDIA_TYPES[export_format], headers=headers)
 

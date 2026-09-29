@@ -22,6 +22,8 @@ __all__ = [
     "ExportFormat",
     "ExtractionMethod",
     "FieldRole",
+    "ImportDuplicatePolicy",
+    "ImportStatus",
     "OcrEngine",
     "PageExtractionSource",
     "ReviewStatus",
@@ -463,6 +465,10 @@ class AuditAction(StrEnum):
     TEMPLATE_CREATED = "template.created"
     TEMPLATE_DELETED = "template.deleted"
 
+    IMPORT_STARTED = "import.started"
+    IMPORT_COMPLETED = "import.completed"
+    IMPORT_CANCELLED = "import.cancelled"
+
     EXPORT_REQUESTED = "export.requested"
     EXPORT_COMPLETED = "export.completed"
 
@@ -536,3 +542,52 @@ class DocumentLinkKind(StrEnum):
 
     SUPERSEDED = "SUPERSEDED"
     """An earlier scan of the same certificate, kept for the record."""
+
+
+class ImportStatus(StrEnum):
+    """Where a CSV import has got to."""
+
+    PENDING = "PENDING"
+    """Uploaded and queued. No row has been read yet."""
+
+    RUNNING = "RUNNING"
+    PARTIAL = "PARTIAL"
+    """Finished, with rows that could not be filed. The errors say which and why."""
+
+    COMPLETED = "COMPLETED"
+    """Every row was filed."""
+
+    FAILED = "FAILED"
+    """The file itself could not be used - wrong columns, unreadable encoding."""
+
+    CANCELLED = "CANCELLED"
+
+    @property
+    def is_finished(self) -> bool:
+        return self in _FINISHED_IMPORTS
+
+
+_FINISHED_IMPORTS = frozenset(
+    {
+        ImportStatus.PARTIAL,
+        ImportStatus.COMPLETED,
+        ImportStatus.FAILED,
+        ImportStatus.CANCELLED,
+    }
+)
+
+
+class ImportDuplicatePolicy(StrEnum):
+    """What an import does with a certificate number the register already holds.
+
+    There is deliberately no option to overwrite. An import is a bulk operation
+    nobody watches row by row, and silently replacing a record with another that
+    happens to share its number is how a register loses an entry with no trace of
+    what it used to say.
+    """
+
+    SKIP = "SKIP"
+    """Leave the existing entry alone and report the row as an error."""
+
+    RECORD_AS_DUPLICATE = "RECORD_AS_DUPLICATE"
+    """Record the row as a second entry, linked to the first and sent to review."""

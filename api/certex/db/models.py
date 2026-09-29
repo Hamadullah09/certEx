@@ -61,6 +61,8 @@ from certex.enums import (
     DuplicateStatus,
     ExportFormat,
     FieldRole,
+    ImportDuplicatePolicy,
+    ImportStatus,
     OcrEngine,
     PageExtractionSource,
     ReviewStatus,
@@ -78,6 +80,7 @@ __all__ = [
     "Certificate",
     "CertificateDate",
     "CertificateDocument",
+    "CertificateImport",
     "CertificateName",
     "CertificateSchema",
     "CertificateTypeRecord",
@@ -87,6 +90,7 @@ __all__ = [
     "Export",
     "Extraction",
     "FieldCorrection",
+    "ImportRowError",
     "PageText",
     "RefreshToken",
     "SchemaField",
@@ -1123,6 +1127,133 @@ class CertificateDocument(Base, TimestampMixin):
 
     certificate: Mapped[Certificate] = relationship(back_populates="documents")
     document: Mapped[Document] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Bulk import
+# ---------------------------------------------------------------------------
+class CertificateImport(Base, TimestampMixin):
+    """One CSV of existing records, being loaded into the register.
+
+    An office that already keeps its registers in spreadsheets starts here, and the
+    file is large: hundreds of thousands of rows is ordinary. So the file is written
+    to object storage and read back a row at a time by a worker, and this row is what
+    the operator watches while that happens.
+
+    The counts are the whole story of a run. They are kept here rather than derived,
+    because deriving them would mean counting a million rows every time somebody
+    refreshes the page.
+    """
+
+    __tablename__ = "certificate_imports"
+    __table_args__ = (
+        Index("ix_certificate_imports_workspace_created", "workspace_id", "created_at"),
+        Index("ix_certificate_imports_status", "workspace_id", "status"),
+        CheckConstraint("total_rows >= 0", name="import_total_rows_not_negative"),
+        CheckConstraint(
+            "created_rows + skipped_rows + failed_rows <= total_rows",
+            name="import_counts_within_total",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    certificate_type_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificate_types.id", ondelete="RESTRICT"), nullable=False
+    )
+    schema_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("schema_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    """The version the columns were read against. Pinned so a later schema change
+    cannot alter what an already-imported row is taken to mean."""
+
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    """What the operator called the file, for display only.
+
+    Never used to build a path, open a file, or decide anything: an uploaded name is
+    attacker-controlled and is not unique.
+    """
+
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    status: Mapped[ImportStatus] = mapped_column(
+        enum_column(ImportStatus), nullable=False, default=ImportStatus.PENDING
+    )
+    duplicate_policy: Mapped[ImportDuplicatePolicy] = mapped_column(
+        enum_column(ImportDuplicatePolicy),
+        nullable=False,
+        default=ImportDuplicatePolicy.SKIP,
+    )
+    delimiter: Mapped[str] = mapped_column(String(8), nullable=False, default=",")
+    encoding: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """The encoding the file turned out to be in, once something has read it."""
+
+    total_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_rows: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    skipped_rows: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    failed_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why the file as a whole could not be used. Per-row problems go to
+    :class:`ImportRowError`."""
+
+    started_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    errors: Mapped[list[ImportRowError]] = relationship(
+        back_populates="certificate_import", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class ImportRowError(Base):
+    """One row of a CSV that could not be filed, and why.
+
+    Rows are never dropped in silence. An import that loaded 99,980 of 100,000 rows
+    is useless to the office unless it can say which twenty failed and what was wrong
+    with them, in terms that let a clerk fix the spreadsheet and load it again.
+
+    ``value_excerpt`` holds the offending value, so the message can name it. It is
+    personal data and belongs to the same trust boundary as the certificates
+    themselves: readable by an operator of this workspace, and never written to a log
+    or an audit entry.
+    """
+
+    __tablename__ = "import_row_errors"
+    __table_args__ = (
+        Index("ix_import_row_errors_import_row", "import_id", "row_number"),
+        CheckConstraint("row_number >= 1", name="import_error_row_number_is_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    import_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificate_imports.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    """The line of the file as a spreadsheet numbers it, header included, so a person
+    can go to that line."""
+
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    field_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    certificate_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    value_excerpt: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    certificate_import: Mapped[CertificateImport] = relationship(back_populates="errors")
 
 
 class Export(Base):

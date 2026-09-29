@@ -36,7 +36,7 @@ __all__ = [
     "rotate_image",
 ]
 
-PREPROCESS_VERSION: Final = 1
+PREPROCESS_VERSION: Final = 2
 """Bumped when the pipeline changes, so cached OCR from an older recipe is not reused."""
 
 PreprocessVariant = Literal["adaptive", "otsu"]
@@ -49,6 +49,15 @@ _SKEW_WORKING_WIDTH: Final = 800
 """Skew is measured on a downscaled copy: the angle is the same and the search is fast."""
 
 _WHITE: Final = 255
+
+_SPECK_AREA_AT_300_DPI: Final = 9
+"""Largest ink blob, in pixels at 300 dpi, that cannot be part of a character.
+
+Scaled with the resolution, since a speck and a letter both grow with it. Set below
+the smallest mark the system has to keep - the nukta under an Urdu letter, the dot of
+an "i", a full stop - each of which covers tens of pixels at 300 dpi, and above the
+one- and two-pixel flecks that adaptive thresholding lifts out of a noisy scan.
+"""
 
 
 def _gray(array: object) -> GrayImage:
@@ -161,6 +170,35 @@ def _binarise(image: GrayImage, *, variant: PreprocessVariant, dpi: int) -> Gray
     )
 
 
+def _despeckle(image: GrayImage, *, dpi: int) -> GrayImage:
+    """Erase ink blobs too small to be part of any character.
+
+    Adaptive thresholding on a grainy scan promotes film grain to ink: thousands of
+    one- and two-pixel flecks that Tesseract then reads as punctuation, so a value
+    comes back as "| 35201-1234567-1" or a label bleeds into the field beside it.
+    Worse, a fleck touching a digit changes which digit it is - a 3 read as a 9 in an
+    identity number is not a cosmetic problem.
+
+    Connected components rather than a blur, because a blur that removes a fleck also
+    thins the strokes it sits next to. Removing a component leaves everything else
+    exactly as it was.
+    """
+    ink = (image < 128).astype(np.uint8)
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    if count <= 1:
+        return image
+
+    limit = max(1, round(_SPECK_AREA_AT_300_DPI * (dpi / 300.0) ** 2))
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    speck_labels = np.flatnonzero(areas <= limit) + 1
+    if speck_labels.size == 0:
+        return image
+
+    cleaned = image.copy()
+    cleaned[np.isin(labels, speck_labels)] = _WHITE
+    return _gray(cleaned)
+
+
 def preprocess(
     image: GrayImage,
     *,
@@ -188,7 +226,9 @@ def preprocess(
             display = rotate_image(display, angle)
             rotation += angle
 
-    binary = _binarise(display, variant=variant, dpi=dpi)
+    # Despeckled before upscaling: at this size a speck is still a speck, and
+    # interpolation would smear it into something the size of real ink.
+    binary = _despeckle(_binarise(display, variant=variant, dpi=dpi), dpi=dpi)
 
     scale = 1.0
     if upscale > 1.0 and binary.shape[1] < upscale_width_threshold:

@@ -26,6 +26,7 @@ __all__ = [
     "QUEUE_DEFAULT",
     "QUEUE_EXPORT",
     "QUEUE_EXTRACT",
+    "QUEUE_IMPORT",
     "QUEUE_INGEST",
     "QUEUE_MAINTENANCE",
     "QUEUE_OCR",
@@ -43,6 +44,10 @@ QUEUE_CLASSIFY: Final = "classify"
 QUEUE_EXTRACT: Final = "extract"
 QUEUE_VALIDATE: Final = "validate"
 QUEUE_EXPORT: Final = "export"
+QUEUE_IMPORT: Final = "import"
+"""Its own queue: one three-hundred-megabyte CSV occupies a worker for minutes, and
+behind the export queue it would hold up every download in the office."""
+
 QUEUE_MAINTENANCE: Final = "maintenance"
 
 _ALL_QUEUES: Final[tuple[str, ...]] = (
@@ -54,6 +59,7 @@ _ALL_QUEUES: Final[tuple[str, ...]] = (
     QUEUE_EXTRACT,
     QUEUE_VALIDATE,
     QUEUE_EXPORT,
+    QUEUE_IMPORT,
     QUEUE_MAINTENANCE,
 )
 
@@ -69,6 +75,7 @@ _ROUTES: Final[dict[str, dict[str, str]]] = {
     "pipeline.validate.*": {"queue": QUEUE_VALIDATE},
     "pipeline.finalize.*": {"queue": QUEUE_VALIDATE},
     "export.*": {"queue": QUEUE_EXPORT},
+    "register.import.*": {"queue": QUEUE_IMPORT},
     "maintenance.*": {"queue": QUEUE_MAINTENANCE},
 }
 

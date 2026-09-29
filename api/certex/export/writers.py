@@ -13,10 +13,13 @@ displays the text and executes nothing.
 system code page and every Urdu name becomes mojibake. It is optional, because anything
 that is not Excel would rather not have it.
 
-**Streaming, not building.** A batch can be thousands of rows; the CSV is produced a row
-at a time so memory is flat and the browser starts downloading immediately. XLSX cannot
-stream that way - openpyxl's write-only mode still assembles a zip - so it is built in
-memory, which is the right trade for a format people open by hand rather than pipe.
+**Streaming, not building.** A batch can be thousands of rows and the register can hold
+millions; the CSV is produced a row at a time so memory is flat and the browser starts
+downloading immediately. Each text format has an asynchronous twin, for rows that arrive
+from the database a page at a time - a synchronous writer forces its caller to collect
+everything first, which is the same as not streaming at all. XLSX cannot stream either
+way - openpyxl's write-only mode still assembles a zip - so it is built in memory, which
+is the right trade for a format people open by hand rather than pipe.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 from typing import Any, Final
 
 from openpyxl import Workbook
@@ -39,7 +42,9 @@ __all__ = [
     "UTF8_BOM",
     "guard_formula",
     "write_csv",
+    "write_csv_stream",
     "write_json",
+    "write_json_stream",
     "write_xlsx",
 ]
 
@@ -69,6 +74,35 @@ def guard_formula(value: str) -> str:
     return value
 
 
+class _CsvBuffer:
+    """One row of CSV at a time, written through the standard library.
+
+    Exists so the synchronous and asynchronous writers below format rows through
+    exactly the same code - RFC 4180 quoting, CRLF endings, formula guarding - and
+    cannot drift into two dialects of the same file format.
+    """
+
+    def __init__(self, *, delimiter: str) -> None:
+        self._buffer = io.StringIO()
+        self._writer = csv.writer(
+            self._buffer, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n"
+        )
+
+    def _flush(self) -> str:
+        text = self._buffer.getvalue()
+        self._buffer.seek(0)
+        self._buffer.truncate(0)
+        return text
+
+    def header(self, plan: ColumnPlan, *, include_bom: bool) -> str:
+        self._writer.writerow([guard_formula(header) for header in plan.headers])
+        return (UTF8_BOM if include_bom else "") + self._flush()
+
+    def row(self, plan: ColumnPlan, row: ExportRow) -> str:
+        self._writer.writerow([guard_formula(value) for value in row.values(plan)])
+        return self._flush()
+
+
 def write_csv(
     plan: ColumnPlan,
     rows: Iterable[ExportRow],
@@ -81,23 +115,35 @@ def write_csv(
     RFC 4180 quoting throughout, and CRLF line endings, which is what the standard says
     and what Excel expects.
     """
-    buffer = io.StringIO()
-    writer = csv.writer(
-        buffer, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n"
-    )
-
-    def flush() -> str:
-        text = buffer.getvalue()
-        buffer.seek(0)
-        buffer.truncate(0)
-        return text
-
-    writer.writerow([guard_formula(header) for header in plan.headers])
-    yield (UTF8_BOM if include_bom else "") + flush()
-
+    buffer = _CsvBuffer(delimiter=delimiter)
+    yield buffer.header(plan, include_bom=include_bom)
     for row in rows:
-        writer.writerow([guard_formula(value) for value in row.values(plan)])
-        yield flush()
+        yield buffer.row(plan, row)
+
+
+async def write_csv_stream(
+    plan: ColumnPlan,
+    rows: AsyncIterable[ExportRow],
+    *,
+    delimiter: str = ",",
+    include_bom: bool = True,
+) -> AsyncIterator[str]:
+    """The same CSV, from rows that arrive a page at a time from the database.
+
+    The point of the asynchronous twin is that nothing is ever wholly in memory. The
+    register holds millions of entries, and collecting them into a list to hand to the
+    synchronous writer would undo the streaming it was written for.
+    """
+    buffer = _CsvBuffer(delimiter=delimiter)
+    yield buffer.header(plan, include_bom=include_bom)
+    async for row in rows:
+        yield buffer.row(plan, row)
+
+
+def _json_object(plan: ColumnPlan, row: ExportRow, *, first: bool) -> str:
+    payload = {key: row.cells.get(key, "") for key in plan.keys}
+    prefix = "" if first else ",\n"
+    return prefix + "  " + json.dumps(payload, ensure_ascii=False)
 
 
 def write_json(plan: ColumnPlan, rows: Iterable[ExportRow]) -> Iterator[str]:
@@ -109,10 +155,18 @@ def write_json(plan: ColumnPlan, rows: Iterable[ExportRow]) -> Iterator[str]:
     yield "[\n"
     first = True
     for row in rows:
-        payload = {key: row.cells.get(key, "") for key in plan.keys}
-        prefix = "" if first else ",\n"
+        yield _json_object(plan, row, first=first)
         first = False
-        yield prefix + "  " + json.dumps(payload, ensure_ascii=False)
+    yield "\n]\n"
+
+
+async def write_json_stream(plan: ColumnPlan, rows: AsyncIterable[ExportRow]) -> AsyncIterator[str]:
+    """The same JSON array, from rows arriving a page at a time."""
+    yield "[\n"
+    first = True
+    async for row in rows:
+        yield _json_object(plan, row, first=first)
+        first = False
     yield "\n]\n"
 
 

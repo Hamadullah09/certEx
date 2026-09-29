@@ -21,6 +21,7 @@ __all__ = [
     "TASK_CLASSIFY_UNIT",
     "TASK_EXTRACT_UNIT",
     "TASK_FINALIZE_DOCUMENT",
+    "TASK_IMPORT_CSV",
     "TASK_OCR_PAGE",
     "TASK_SPLIT_DOCUMENT",
     "TASK_TEXT_DOCUMENT",
@@ -39,6 +40,7 @@ TASK_CLASSIFY_UNIT: Final = "pipeline.classify.unit"
 TASK_EXTRACT_UNIT: Final = "pipeline.extract.unit"
 TASK_VALIDATE_UNIT: Final = "pipeline.validate.unit"
 TASK_FINALIZE_DOCUMENT: Final = "pipeline.finalize.document"
+TASK_IMPORT_CSV: Final = "register.import.csv"
 
 TaskArgument = str | int
 Dispatch = Callable[[str, dict[str, TaskArgument]], None]

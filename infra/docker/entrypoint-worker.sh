@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Entrypoint for Celery. WORKER_ROLE selects what this container runs:
 #
-#   default  general queues (ingest, normalize, text, classify, extract, validate)
+#   default  general queues (ingest, normalize, text, classify, extract, validate,
+#            export, import, maintenance)
 #   ocr      only the CPU-bound OCR queue, with its own concurrency ceiling so it
 #            cannot starve the fast queues
 #   beat     the scheduler (retention sweeps, stalled-batch reconciliation)
@@ -66,7 +67,7 @@ case "${ROLE}" in
   *)
     echo "[worker] starting default worker (concurrency=${CONCURRENCY})"
     exec celery -A worker.celery_app worker \
-        --queues default,ingest,text,classify,extract,validate,export,maintenance \
+        --queues default,ingest,text,classify,extract,validate,export,import,maintenance \
         --concurrency "${CONCURRENCY}" \
         --max-tasks-per-child "${MAX_TASKS}" \
         --prefetch-multiplier 1 \

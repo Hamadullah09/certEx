@@ -83,6 +83,11 @@ class StorageKeys:
         return f"exports/{workspace_id}/{export_id}.{safe_extension}"
 
     @staticmethod
+    def import_file(workspace_id: uuid.UUID, import_id: uuid.UUID) -> str:
+        """Key for an uploaded CSV. Built from ids, never from the uploaded name."""
+        return f"imports/{workspace_id}/{import_id}.csv"
+
+    @staticmethod
     def derived(workspace_id: uuid.UUID, document_id: uuid.UUID, kind: str) -> str:
         """Key for a file derived from a document, e.g. a .doc converted to .docx."""
         if not kind.replace("-", "").isalnum():

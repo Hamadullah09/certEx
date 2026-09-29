@@ -13,17 +13,24 @@ than left to the caller:
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, WorkspaceScopeDep
-from certex.core.errors import NotFoundError, ValidationFailedError
-from certex.db.models import Certificate, Document
+from certex.core.errors import BadRequestError, NotFoundError, ValidationFailedError
+from certex.db.models import Certificate, CertificateTypeRecord, Document
 from certex.enums import AuditAction, CertificateSource, CertificateType, UserRole
+from certex.export.columns import Column, ColumnPlan
+from certex.export.rows import ExportRow
+from certex.export.writers import DELIMITERS, write_csv_stream
 from certex.fields import FieldSchema, builtin_schema
 from certex.logging_setup import get_logger
 from certex.schemas.certificates import (
@@ -44,6 +51,9 @@ router = APIRouter(prefix="/certificates", tags=["certificates"])
 
 CursorParam = Annotated[str | None, Query(description="Opaque cursor from a previous page.")]
 LimitParam = Annotated[int, Query(ge=1, le=200, description="Maximum entries to return.")]
+
+_EXPORT_PAGE = 500
+"""Entries per database round trip while streaming an export."""
 
 
 def _detail(certificate: Certificate) -> CertificateDetail:
@@ -105,6 +115,141 @@ async def list_certificates(
         [CertificateSummary.model_validate(row) for row in rows],
         limit=limit,
         next_cursor=next_cursor,
+    )
+
+
+def _register_plan(schema: FieldSchema) -> ColumnPlan:
+    """The columns of a register export: the schema's own fields, in its own order.
+
+    No confidence or provenance columns. This file is the register as the office
+    asserts it, not a report on how well a machine read it - that is what the batch
+    export is for.
+    """
+    return ColumnPlan(
+        columns=[
+            Column(key=spec.name, header=spec.label, field=spec.name) for spec in schema.fields
+        ]
+    )
+
+
+def _register_row(certificate: Certificate, schema: FieldSchema) -> ExportRow:
+    stored = certificate.values_jsonb
+    return ExportRow(
+        cells={
+            spec.name: value if isinstance(value := stored.get(spec.name), str) else ""
+            for spec in schema.fields
+        },
+        flagged=certificate.needs_review,
+    )
+
+
+async def _stream_register(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    certificate_type_id: uuid.UUID,
+    schema: FieldSchema,
+    needs_review: bool | None,
+) -> AsyncIterator[ExportRow]:
+    """Every matching entry, a page at a time.
+
+    Keyset paged rather than one big query: a register of a million entries has to
+    leave the database a page at a time, and the download starts before the last page
+    has been read.
+    """
+    cursor: Cursor | None = None
+    while True:
+        rows, cursor = await certificate_service.list_certificates(
+            session,
+            workspace_id=workspace_id,
+            certificate_type_id=certificate_type_id,
+            needs_review=needs_review,
+            limit=_EXPORT_PAGE,
+            cursor=cursor,
+        )
+        for row in rows:
+            yield _register_row(row, schema)
+        if cursor is None:
+            return
+
+
+@router.get(
+    "/export",
+    response_class=StreamingResponse,
+    summary="Download the register as a CSV",
+    responses={
+        200: {"content": {"text/csv": {}}},
+        404: {"description": "No such certificate type in this workspace."},
+    },
+)
+async def export_register(
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+    certificate_type_id: Annotated[
+        uuid.UUID, Query(description="Which register to export. One type per file.")
+    ],
+    needs_review: Annotated[
+        bool | None, Query(description="Only entries waiting for review, or only settled ones.")
+    ] = None,
+    delimiter: Annotated[str, Query(description="comma, semicolon, tab or pipe.")] = "comma",
+    include_bom: Annotated[
+        bool, Query(description="Byte-order mark, so Excel on Windows reads Urdu correctly.")
+    ] = True,
+) -> StreamingResponse:
+    """One certificate type per file, because their columns differ.
+
+    The response begins before the query has finished: rows go from the database into
+    the download a page at a time, so the file size is bounded by the register and the
+    memory used is not.
+    """
+    separator = DELIMITERS.get(delimiter)
+    if separator is None:
+        raise BadRequestError(
+            f"{delimiter!r} is not a delimiter this system writes.",
+            remediation="Choose comma, semicolon, tab or pipe.",
+        )
+
+    type_record = await session.get(CertificateTypeRecord, certificate_type_id)
+    if type_record is None or type_record.workspace_id != scope.workspace_id:
+        raise NotFoundError("That certificate type does not exist in this workspace.")
+
+    version = await schema_service.default_version_for_type(
+        session, scope=scope, certificate_type_id=certificate_type_id
+    )
+    schema = (
+        await schema_service.resolve_schema(session, version.id)
+        if version is not None
+        else builtin_schema(type_record.classifier_key or CertificateType.OTHER)
+    )
+    plan = _register_plan(schema)
+
+    await record_audit(
+        session,
+        AuditAction.EXPORT_REQUESTED,
+        audit,
+        entity_type="certificate_type",
+        entity_id=certificate_type_id,
+    )
+    await session.commit()
+
+    stamp = dt.datetime.now(tz=dt.UTC).strftime("%Y%m%d-%H%M%S")
+    filename = f"{type_record.key.lower()}-register-{stamp}.csv"
+    rows = _stream_register(
+        session,
+        workspace_id=scope.workspace_id,
+        certificate_type_id=certificate_type_id,
+        schema=schema,
+        needs_review=needs_review,
+    )
+    return StreamingResponse(
+        write_csv_stream(plan, rows, delimiter=separator, include_bom=include_bom),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}"
+            )
+        },
     )
 
 
