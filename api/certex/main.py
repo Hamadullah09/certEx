@@ -27,6 +27,7 @@ from certex.api.v1 import progress as progress_routes
 from certex.api.v1 import registry as registry_routes
 from certex.api.v1 import rows as row_routes
 from certex.api.v1 import units as unit_routes
+from certex.api.v1 import workspace as workspace_routes
 from certex.config import Settings, get_settings
 from certex.core.errors import (
     AppError,
@@ -98,6 +99,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "name": "registry",
                 "description": "Certificate types and the schemas that define their fields.",
+            },
+            {
+                "name": "workspace",
+                "description": "Settings for one records office.",
             },
             {
                 "name": "imports",
@@ -233,6 +238,7 @@ def _register_routes(application: FastAPI) -> None:
     application.include_router(registry_routes.router, prefix=API_V1_PREFIX)
     application.include_router(certificate_routes.router, prefix=API_V1_PREFIX)
     application.include_router(import_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(workspace_routes.router, prefix=API_V1_PREFIX)
     application.include_router(unit_routes.router, prefix=API_V1_PREFIX)
     application.include_router(row_routes.router, prefix=API_V1_PREFIX)
     application.include_router(progress_routes.router, prefix=API_V1_PREFIX)

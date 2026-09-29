@@ -27,6 +27,7 @@ __all__ = [
     "OcrEngine",
     "PageExtractionSource",
     "ReviewStatus",
+    "RevisionAction",
     "SchemaVersionStatus",
     "Sex",
     "UnitStatus",
@@ -591,3 +592,32 @@ class ImportDuplicatePolicy(StrEnum):
 
     RECORD_AS_DUPLICATE = "RECORD_AS_DUPLICATE"
     """Record the row as a second entry, linked to the first and sent to review."""
+
+
+class RevisionAction(StrEnum):
+    """What happened to a register entry, one row of its history.
+
+    The register is a historical record: an entry that once said something has to
+    keep saying it, in a form somebody can read back, because a person may be
+    holding a copy of what it used to say.
+    """
+
+    CREATED = "CREATED"
+    CORRECTED = "CORRECTED"
+    """A value was changed by a person, who is named and whose reason is kept."""
+
+    APPROVED = "APPROVED"
+    """A reviewer accepted the entry as it stands."""
+
+    VOIDED = "VOIDED"
+    """Cancelled by the issuing office. Still readable, never used as an answer."""
+
+    SUPERSEDED = "SUPERSEDED"
+    """Replaced by another entry, which this one points at."""
+
+    DUPLICATE_RESOLVED = "DUPLICATE_RESOLVED"
+    """A person decided whether two entries were one certificate or two."""
+
+    DOCUMENT_ATTACHED = "DOCUMENT_ATTACHED"
+    DOCUMENT_REPLACED = "DOCUMENT_REPLACED"
+    """A better scan of the same certificate arrived. The old one is kept."""

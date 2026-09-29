@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
+import { ReviewActions } from "@/components/register/review-actions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCertificate, useDuplicateCandidates } from "@/hooks/use-register";
 import { apiBaseUrl, ApiError } from "@/lib/api";
-import type { CertificateDetail, DocumentLink } from "@/lib/schemas/certificates";
+import type { DocumentLink, DuplicateCandidate } from "@/lib/schemas/certificates";
 import { valueTextAttributes } from "@/lib/text-direction";
 
 function displayDate(iso: string | null | undefined): string {
@@ -124,11 +125,12 @@ function DocumentRow({
   );
 }
 
-function Duplicates({ certificate }: { certificate: CertificateDetail }) {
-  const { data: candidates } = useDuplicateCandidates(certificate.id, {
-    enabled: certificate.duplicate_status !== "NONE",
-  });
-  if (!candidates || candidates.length === 0) return null;
+function Duplicates({
+  candidates,
+}: {
+  candidates: readonly DuplicateCandidate[];
+}) {
+  if (candidates.length === 0) return null;
 
   return (
     <Alert variant="warning">
@@ -173,6 +175,7 @@ function Duplicates({ certificate }: { certificate: CertificateDetail }) {
 export default function CertificateDetailPage() {
   const params = useParams<{ id: string }>();
   const { data: certificate, isPending, error } = useCertificate(params.id);
+  const { data: candidates } = useDuplicateCandidates(params.id);
 
   if (error) {
     return (
@@ -236,7 +239,7 @@ export default function CertificateDetailPage() {
           }
         />
 
-        <Duplicates certificate={certificate} />
+        <Duplicates candidates={candidates ?? []} />
 
         <Card>
           <CardHeader className="pb-2">
@@ -292,9 +295,11 @@ export default function CertificateDetailPage() {
           </CardContent>
         </Card>
 
+        <ReviewActions certificate={certificate} candidates={candidates ?? []} />
+
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle>Record history</CardTitle>
+            <CardTitle>Record details</CardTitle>
           </CardHeader>
           <CardContent>
             <dl className="grid gap-3 sm:grid-cols-2">

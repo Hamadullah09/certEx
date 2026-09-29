@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Info, Settings as SettingsIcon } from "lucide-react";
+import { Info, Lock, Settings as SettingsIcon } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -13,12 +13,15 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBatch, useBatchList } from "@/hooks/use-batches";
+import { useSession } from "@/hooks/use-session";
+import { useSaveWorkspaceSettings, useWorkspaceSettings } from "@/hooks/use-review";
+import { ApiError } from "@/lib/api";
+import type { ReviewSettings } from "@/lib/schemas/review";
 import {
   OCR_LANGUAGE_OPTIONS,
   settingsFromBatchSettings,
   unknownOcrLanguages,
 } from "@/lib/schemas/settings";
-import { formatConfidence } from "@/lib/utils";
 
 /*
  * The same tappable option row the upload screen uses: the whole 48px strip is the
@@ -27,35 +30,79 @@ import { formatConfidence } from "@/lib/utils";
 const OPTION_ROW =
   "flex min-h-12 items-center gap-3 rounded-lg px-3 text-base font-medium has-[:disabled]:text-muted-foreground";
 
-function ReadOnlyValue({ children }: { children: React.ReactNode }) {
-  return <p className="mt-1.5 text-base font-semibold tabular-nums text-foreground">{children}</p>;
+/** A threshold as a whole number out of 100, which is how the page talks about it. */
+function asPercent(value: number): string {
+  return String(Math.round(value * 100));
+}
+
+function fromPercent(text: string): number | null {
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return null;
+  return parsed / 100;
 }
 
 /**
  * Workspace settings.
  *
- * Nothing here can be saved yet: the API has no settings route, and a form that
- * looked writable would quietly lose a records officer's work. So the controls are
- * disabled and say why, and the values that *are* readable - the thresholds and OCR
- * languages a batch was created with - are shown with their source named.
+ * The review thresholds are the office's own judgement, and this is where they are
+ * made: an archive digitising fifty-year-old registers accepts more automatically than
+ * an office issuing certificates today, and both are right.
  *
- * There are no model or LLM settings on this page, and there is nowhere else in the
- * app for them either: this deployment reads certificates with Tesseract and rules.
+ * Only administrators can save. An operator sees the same numbers, read-only, because
+ * knowing why a row was routed for checking is part of doing the checking - and the
+ * server enforces the same rule regardless of what this page shows.
+ *
+ * OCR languages and retention are still per-batch and server-side respectively, and
+ * the page says so rather than pretending otherwise.
  */
 export default function SettingsPage() {
-  /*
-   * The newest batch is the only place the API exposes these values today: a batch
-   * summary carries no settings, but its detail does, so the list gives the id and
-   * one more request gives the numbers. It is the honest source, and the page says
-   * so rather than printing the server's defaults as if they had been read.
-   */
+  const { data: session } = useSession();
+  const canSave = session?.user.role === "ADMIN";
+
+  const { data: settings, isPending } = useWorkspaceSettings();
+  const save = useSaveWorkspaceSettings();
+
+  const [autoApprove, setAutoApprove] = React.useState("");
+  const [floor, setFloor] = React.useState("");
+  const [reviewImports, setReviewImports] = React.useState(false);
+  const [reviewDuplicates, setReviewDuplicates] = React.useState(true);
+
+  // Seeded once the server's values arrive; typing afterwards is the operator's.
+  const seeded = React.useRef(false);
+  React.useEffect(() => {
+    if (!settings || seeded.current) return;
+    seeded.current = true;
+    setAutoApprove(asPercent(settings.review.confidence_auto_approve));
+    setFloor(asPercent(settings.review.confidence_review_floor));
+    setReviewImports(settings.review.review_imported_records);
+    setReviewDuplicates(settings.review.review_suspected_duplicates);
+  }, [settings]);
+
+  const parsedAuto = fromPercent(autoApprove);
+  const parsedFloor = fromPercent(floor);
+  const contradictory =
+    parsedAuto !== null && parsedFloor !== null && parsedFloor > parsedAuto;
+  const usable = parsedAuto !== null && parsedFloor !== null && !contradictory;
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (parsedAuto === null || parsedFloor === null) return;
+    const review: ReviewSettings = {
+      confidence_auto_approve: parsedAuto,
+      confidence_review_floor: parsedFloor,
+      review_imported_records: reviewImports,
+      review_suspected_duplicates: reviewDuplicates,
+    };
+    save.mutate({ review });
+  }
+
+  // The OCR languages are still per batch, and the newest batch is the only place
+  // the API exposes them. Shown with their source named rather than as a default.
   const batches = useBatchList();
   const newestId = batches.data?.pages[0]?.items[0]?.id ?? "";
   const newest = useBatch(newestId);
-  const current = settingsFromBatchSettings(newest.data?.settings);
-  const isLoading = batches.isPending || (Boolean(newestId) && newest.isPending);
-
-  const languages = current.ocr_languages ?? [];
+  const batchSettings = settingsFromBatchSettings(newest.data?.settings);
+  const languages = batchSettings.ocr_languages ?? [];
   const extraLanguages = unknownOcrLanguages(languages);
 
   return (
@@ -63,76 +110,166 @@ export default function SettingsPage() {
       <PageHeader
         icon={SettingsIcon}
         title="Settings"
-        description="How this workspace reads certificates: when a row is accepted on its own, which languages are recognised, and how long files are kept."
+        description="How this office reads certificates: when a reading is accepted on its own, and what goes to a person to check."
       />
 
-      <Alert className="mt-8">
-        <Info aria-hidden="true" />
-        <AlertTitle>These settings cannot be changed here yet</AlertTitle>
-        <AlertDescription>
-          Changing them workspace-wide is coming in a later release. Until then each batch carries
-          its own confidence levels and languages, chosen on the screen where the batch is created,
-          and retention is set by an administrator on the server.
-        </AlertDescription>
-      </Alert>
+      {!canSave ? (
+        <Alert className="mt-8">
+          <Lock aria-hidden="true" />
+          <AlertTitle>Only an administrator can change these</AlertTitle>
+          <AlertDescription>
+            They are shown here because knowing where the thresholds sit explains why a
+            row was sent for checking.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
-      <Card className="mt-8">
-        <CardHeader className="pb-5">
-          <CardTitle>When a certificate is accepted without a person</CardTitle>
-          <CardDescription>
-            Every certificate is scored out of 100. Above the upper level it is accepted on its own;
-            below the lower one it is marked as failed instead of being sent for checking.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-6 sm:grid-cols-2">
-          <div>
-            <Label htmlFor="confidence-auto">Accept on its own at or above</Label>
-            {isLoading ? (
-              <Skeleton className="mt-1.5 h-12 w-full" />
-            ) : current.confidence_auto_approve !== undefined ? (
-              <ReadOnlyValue>{formatConfidence(current.confidence_auto_approve)}</ReadOnlyValue>
-            ) : (
-              <Input
-                id="confidence-auto"
-                className="mt-1.5"
-                disabled
-                placeholder="Set on the server"
-                aria-describedby="confidence-auto-note"
+      <form onSubmit={submit}>
+        <Card className="mt-8">
+          <CardHeader className="pb-5">
+            <CardTitle>When a reading is accepted without a person</CardTitle>
+            <CardDescription>
+              Every certificate read by the machine is scored out of 100. At or above the
+              upper level it is accepted on its own; below the lower one it is marked as
+              unread rather than shown as a value somebody might trust. Anything between
+              goes to the review queue.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-6 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="confidence-auto">Accept on its own at or above</Label>
+              {isPending ? (
+                <Skeleton className="mt-1.5 h-12 w-full" />
+              ) : (
+                <Input
+                  id="confidence-auto"
+                  className="mt-1.5"
+                  type="number"
+                  min={0}
+                  max={100}
+                  inputMode="numeric"
+                  value={autoApprove}
+                  disabled={!canSave}
+                  onChange={(event) => setAutoApprove(event.target.value)}
+                  aria-describedby="confidence-auto-note"
+                />
+              )}
+              <p id="confidence-auto-note" className="mt-1.5 text-sm text-muted-foreground">
+                100 means every reading is checked by a person, which is the safe
+                position for an office that has not decided yet.
+              </p>
+            </div>
+
+            <div>
+              <Label htmlFor="confidence-floor">Mark as unread below</Label>
+              {isPending ? (
+                <Skeleton className="mt-1.5 h-12 w-full" />
+              ) : (
+                <Input
+                  id="confidence-floor"
+                  className="mt-1.5"
+                  type="number"
+                  min={0}
+                  max={100}
+                  inputMode="numeric"
+                  value={floor}
+                  disabled={!canSave}
+                  onChange={(event) => setFloor(event.target.value)}
+                  aria-describedby="confidence-floor-note"
+                  aria-invalid={contradictory}
+                />
+              )}
+              <p id="confidence-floor-note" className="mt-1.5 text-sm text-muted-foreground">
+                {contradictory
+                  ? "This is above the upper level, which would make every reading both failed and accepted."
+                  : "A value nobody can read is worse than no value, so below this it is not offered as one."}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mt-8">
+          <CardHeader className="pb-5">
+            <CardTitle>What else goes to review</CardTitle>
+            <CardDescription>
+              Beyond the score, two kinds of entry can be queued for a person.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <label className={OPTION_ROW}>
+              <input
+                type="checkbox"
+                className="size-6"
+                checked={reviewDuplicates}
+                disabled={!canSave}
+                onChange={(event) => setReviewDuplicates(event.target.checked)}
               />
-            )}
-            <p id="confidence-auto-note" className="mt-1.5 text-sm text-muted-foreground">
-              A score this high means every field was read cleanly and no check failed.
+              A certificate number the register already holds
+            </label>
+            <p className="px-3 text-sm text-muted-foreground">
+              Turning this off does not merge anything. The duplicate is still recorded
+              and still shown on both entries; it simply does not queue work.
             </p>
-          </div>
 
-          <div>
-            <Label htmlFor="confidence-floor">Mark as failed below</Label>
-            {isLoading ? (
-              <Skeleton className="mt-1.5 h-12 w-full" />
-            ) : current.confidence_review_floor !== undefined ? (
-              <ReadOnlyValue>{formatConfidence(current.confidence_review_floor)}</ReadOnlyValue>
-            ) : (
-              <Input
-                id="confidence-floor"
-                className="mt-1.5"
-                disabled
-                placeholder="Set on the server"
-                aria-describedby="confidence-floor-note"
+            <label className={OPTION_ROW}>
+              <input
+                type="checkbox"
+                className="size-6"
+                checked={reviewImports}
+                disabled={!canSave}
+                onChange={(event) => setReviewImports(event.target.checked)}
               />
-            )}
-            <p id="confidence-floor-note" className="mt-1.5 text-sm text-muted-foreground">
-              Anything between the two levels is put in front of a person to check.
+              Records loaded from a spreadsheet
+            </label>
+            <p className="px-3 text-sm text-muted-foreground">
+              They were typed by a person, so by default there is no machine reading to
+              check.
             </p>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      <Card className="mt-8">
+        {save.error ? (
+          <Alert variant="destructive" className="mt-8">
+            <AlertTitle>The settings were not saved</AlertTitle>
+            <AlertDescription>
+              {save.error instanceof ApiError
+                ? (save.error.remediation ?? save.error.message)
+                : save.error.message}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {save.isSuccess ? (
+          <Alert variant="success" className="mt-8">
+            <AlertTitle>Saved</AlertTitle>
+            <AlertDescription>
+              These levels apply to every certificate read from now on. Entries already
+              in the register are not re-routed.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        <Separator className="mt-10" tone="subtle" />
+
+        <div className="mt-6 flex flex-wrap items-center gap-4">
+          <Button type="submit" size="lg" disabled={!canSave || !usable || save.isPending}>
+            Save settings
+          </Button>
+          {!canSave ? (
+            <p className="text-base text-muted-foreground">
+              Ask an administrator to change these.
+            </p>
+          ) : null}
+        </div>
+      </form>
+
+      <Card className="mt-10">
         <CardHeader className="pb-5">
           <CardTitle>Languages on the scans</CardTitle>
           <CardDescription>
-            Which languages the reader looks for when a certificate is a photograph or a scan rather
-            than a document with text in it.
+            Which languages the reader looks for when a certificate is a photograph or a
+            scan rather than a document with text in it. Still chosen per batch, on the
+            screen where the batch is created.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -156,51 +293,23 @@ export default function SettingsPage() {
               Also set on the server: {extraLanguages.join(", ")}
             </p>
           ) : null}
-          {languages.length === 0 && !isLoading ? (
+          {languages.length === 0 ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              No batch has been created yet, so there is nothing to show here. The server default is
-              English and Urdu together.
+              No batch has been created yet, so there is nothing to show here. The server
+              default is English and Urdu together.
             </p>
           ) : null}
         </CardContent>
       </Card>
 
-      <Card className="mt-8">
-        <CardHeader className="pb-5">
-          <CardTitle>How long files are kept</CardTitle>
-          <CardDescription>
-            After this many days the uploaded files and their page images are deleted. The extracted
-            rows are not affected.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="max-w-xs">
-            <Label htmlFor="retention-days">Days</Label>
-            <Input
-              id="retention-days"
-              className="mt-1.5"
-              disabled
-              placeholder="Set on the server"
-              aria-describedby="retention-note"
-            />
-            <p id="retention-note" className="mt-1.5 text-sm text-muted-foreground">
-              Retention is not readable from here. An administrator sets it where the server is
-              configured.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Separator className="mt-10" tone="subtle" />
-
-      <div className="mt-6 flex flex-wrap items-center gap-4">
-        <Button disabled size="lg">
-          Save settings
-        </Button>
-        <p className="text-base text-muted-foreground">
-          Saving arrives with the workspace settings route in a later release.
-        </p>
-      </div>
+      <Alert className="mt-8">
+        <Info aria-hidden="true" />
+        <AlertTitle>How long files are kept</AlertTitle>
+        <AlertDescription>
+          Retention is set where the server is configured, not from here, because it
+          deletes files rather than changing how they are read.
+        </AlertDescription>
+      </Alert>
     </AppShell>
   );
 }

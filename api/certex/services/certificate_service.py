@@ -42,6 +42,7 @@ from certex.db.models import (
     CertificateDate,
     CertificateDocument,
     CertificateName,
+    CertificateRevision,
 )
 from certex.enums import (
     CertificateSource,
@@ -49,10 +50,12 @@ from certex.enums import (
     DocumentLinkKind,
     DuplicateStatus,
     FieldRole,
+    RevisionAction,
 )
 from certex.fields import FieldSchema
 from certex.logging_setup import get_logger
 from certex.schemas.common import Cursor
+from certex.schemas.workspace import ReviewSettings
 
 __all__ = [
     "MAX_DUPLICATE_CANDIDATES",
@@ -328,9 +331,14 @@ def _new_certificate(
     source_extraction_id: uuid.UUID | None,
     source_batch_id: uuid.UUID | None,
     actor_id: uuid.UUID | None,
+    review: ReviewSettings,
 ) -> Certificate:
     """The entry row itself, with its duplicate question already attached."""
     strong = next((match for match in duplicates if match.is_strong), None)
+    # Whether a duplicate is worth a reviewer's time is the office's call. Turning it
+    # off does not merge anything: the duplicate is still recorded and still shown on
+    # both entries, it simply does not queue work.
+    queue_for_duplicate = bool(duplicates) and review.review_suspected_duplicates
     return Certificate(
         workspace_id=workspace_id,
         certificate_type_id=certificate_type_id,
@@ -355,7 +363,7 @@ def _new_certificate(
         status=CertificateStatus.ACTIVE,
         # A duplicate is a question, and a question belongs in the review queue
         # whatever the confidence of the reading was.
-        needs_review=needs_review or bool(duplicates),
+        needs_review=needs_review or queue_for_duplicate,
         duplicate_status=DuplicateStatus.SUSPECTED if duplicates else DuplicateStatus.NONE,
         duplicate_of_id=strong.certificate_id if strong else None,
         source=source,
@@ -406,10 +414,39 @@ def _logged(certificate: Certificate, duplicates: tuple[DuplicateMatch, ...]) ->
         "certificate.recorded",
         entity_id=str(certificate.id),
         workspace_id=str(certificate.workspace_id),
-        source=certificate.source.value,
+        extraction_source=certificate.source.value,
         duplicate_count=len(duplicates),
-        needs_review=certificate.needs_review,
+        review_status="NEEDS_REVIEW" if certificate.needs_review else "SETTLED",
     )
+
+
+def record_revision(
+    session: AsyncSession | SyncSession,
+    certificate: Certificate,
+    *,
+    action: RevisionAction,
+    changed_fields: Sequence[str] = (),
+    note: str | None = None,
+    actor_id: uuid.UUID | None = None,
+) -> CertificateRevision:
+    """Add a history row for what just happened to this entry.
+
+    Does not flush: the caller is mid-transaction and the revision belongs to the same
+    unit of work as the change it records, or a failure could leave one without the
+    other.
+    """
+    revision = CertificateRevision(
+        certificate_id=certificate.id,
+        workspace_id=certificate.workspace_id,
+        record_version=certificate.record_version,
+        action=action,
+        values_jsonb=dict(certificate.values_jsonb),
+        changed_fields=list(changed_fields),
+        note=note,
+        actor_id=actor_id,
+    )
+    session.add(revision)
+    return revision
 
 
 async def record_certificate(
@@ -428,6 +465,7 @@ async def record_certificate(
     source_batch_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = None,
     allow_duplicate: bool = False,
+    review: ReviewSettings | None = None,
     today: dt.date | None = None,
 ) -> Certificate:
     """Write one entry into the register.
@@ -469,11 +507,13 @@ async def record_certificate(
         source_extraction_id=source_extraction_id,
         source_batch_id=source_batch_id,
         actor_id=actor_id,
+        review=review or ReviewSettings(),
     )
     session.add(certificate)
     await session.flush()
     for row in _side_rows(certificate, workspace_id=workspace_id, draft=draft):
         session.add(row)
+    record_revision(session, certificate, action=RevisionAction.CREATED, actor_id=actor_id)
     await session.flush()
     _logged(certificate, duplicates)
     return certificate
@@ -494,6 +534,7 @@ def record_certificate_sync(
     source_extraction_id: uuid.UUID | None = None,
     source_batch_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = None,
+    review: ReviewSettings | None = None,
     today: dt.date | None = None,
 ) -> Certificate:
     """Write one entry from a worker.
@@ -523,11 +564,13 @@ def record_certificate_sync(
         source_extraction_id=source_extraction_id,
         source_batch_id=source_batch_id,
         actor_id=actor_id,
+        review=review or ReviewSettings(),
     )
     session.add(certificate)
     session.flush()
     for row in _side_rows(certificate, workspace_id=workspace_id, draft=draft):
         session.add(row)
+    record_revision(session, certificate, action=RevisionAction.CREATED, actor_id=actor_id)
     session.flush()
     _logged(certificate, duplicates)
     return certificate

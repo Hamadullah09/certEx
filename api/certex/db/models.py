@@ -26,6 +26,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -66,6 +67,7 @@ from certex.enums import (
     OcrEngine,
     PageExtractionSource,
     ReviewStatus,
+    RevisionAction,
     SchemaVersionStatus,
     UnitStatus,
     UserRole,
@@ -82,6 +84,7 @@ __all__ = [
     "CertificateDocument",
     "CertificateImport",
     "CertificateName",
+    "CertificateRevision",
     "CertificateSchema",
     "CertificateTypeRecord",
     "CertificateUnit",
@@ -981,6 +984,73 @@ class Certificate(Base, TimestampMixin):
     documents: Mapped[list[CertificateDocument]] = relationship(
         back_populates="certificate", cascade="all, delete-orphan", passive_deletes=True
     )
+    revisions: Mapped[list[CertificateRevision]] = relationship(
+        back_populates="certificate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="CertificateRevision.record_version",
+    )
+
+
+class CertificateRevision(Base):
+    """One entry in a register entry's history.
+
+    The register is a historical record. Somebody may be holding a certificate that
+    was issued from what this entry used to say, so a correction cannot simply
+    overwrite it: the previous reading has to stay readable, with who changed it, when,
+    and why.
+
+    Each revision stores the *whole* value set as it stood afterwards, rather than a
+    diff. An entry is a few hundred bytes and the question people actually ask is
+    "what did this say in March", which a diff chain answers only by replaying itself.
+    ``changed_fields`` is kept alongside so a history screen can show what moved
+    without comparing two documents.
+    """
+
+    __tablename__ = "certificate_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "certificate_id", "record_version", name="uq_certificate_revisions_version"
+        ),
+        Index("ix_certificate_revisions_certificate", "certificate_id", "record_version"),
+        CheckConstraint("record_version >= 1", name="revision_version_is_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    record_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """The version this revision produced, matching ``certificates.record_version``."""
+
+    action: Mapped[RevisionAction] = mapped_column(enum_column(RevisionAction), nullable=False)
+    values_jsonb: Mapped[JSONDict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    """Every value as it stood after this revision."""
+
+    changed_fields: Mapped[JSONList] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why. Required of a person correcting a value, because a correction without a
+    reason is indistinguishable from a mistake."""
+
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+        index=True,
+    )
+
+    certificate: Mapped[Certificate] = relationship(back_populates="revisions")
 
 
 class CertificateName(Base):

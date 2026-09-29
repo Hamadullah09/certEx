@@ -1,16 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, BookOpen } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, ClipboardCheck } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCertificateTypes } from "@/hooks/use-register";
+import { useReviewSummary } from "@/hooks/use-review";
 import { ApiError } from "@/lib/api";
 import type { CertificateTypeSummary } from "@/lib/schemas/registry";
+
+/** The queue, with what is in it, so a reviewer can see the work without opening it. */
+function ReviewQueueLink() {
+  const { data: summary } = useReviewSummary();
+  const waiting = summary?.needs_review ?? 0;
+  return (
+    <Button variant={waiting > 0 ? "default" : "outline"} asChild>
+      <Link href="/register/review">
+        <ClipboardCheck aria-hidden="true" />
+        Review
+        {waiting > 0 ? (
+          <Badge variant="outline" className="ml-2">
+            {waiting}
+          </Badge>
+        ) : null}
+      </Link>
+    </Button>
+  );
+}
 
 function TypeCard({ type }: { type: CertificateTypeSummary }) {
   return (
@@ -55,6 +77,7 @@ export default function RegisterPage() {
         icon={BookOpen}
         title="Register"
         description="Find a certificate by its number, or by the names on it."
+        actions={<ReviewQueueLink />}
       />
 
       {error ? (

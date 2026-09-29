@@ -43,7 +43,7 @@ from certex.enums import (
 from certex.fields import FieldSchema, schema_or_builtin
 from certex.logging_setup import get_logger
 from certex.pipeline.state import refresh_batch_progress
-from certex.services import certificate_service, schema_service
+from certex.services import certificate_service, schema_service, workspace_service
 
 __all__ = ["FinalizeStageResult", "run_finalize_document_stage"]
 
@@ -129,6 +129,7 @@ def _publish_to_register(document_id: uuid.UUID) -> int:
 
         batch = session.get(Batch, document.batch_id)
         pinned_schema = schema_service.schema_for_batch_sync(session, document.batch_id)
+        review = workspace_service.review_settings_sync(session, document.workspace_id)
 
         rows = list(
             session.scalars(
@@ -168,6 +169,7 @@ def _publish_to_register(document_id: uuid.UUID) -> int:
                     provenance=_provenance_of(row),
                     row_confidence=row.row_confidence,
                     needs_review=not row.review_status.is_approved,
+                    review=review,
                     source_extraction_id=row.id,
                     source_batch_id=row.batch_id,
                 )

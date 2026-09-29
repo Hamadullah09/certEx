@@ -44,8 +44,22 @@ from certex.schemas.certificates import (
     DuplicateCandidate,
 )
 from certex.schemas.common import Cursor, Page
+from certex.schemas.review import (
+    ApproveRequest,
+    CorrectionRequest,
+    ResolveDuplicateRequest,
+    ReviewSummary,
+    RevisionOut,
+    VoidRequest,
+)
 from certex.schemas.search import SearchHitOut, SearchResponse
-from certex.services import certificate_service, schema_service, search_service
+from certex.services import (
+    certificate_service,
+    review_service,
+    schema_service,
+    search_service,
+    workspace_service,
+)
 from certex.storage.s3 import get_object_storage
 
 __all__ = ["router"]
@@ -349,6 +363,197 @@ async def search_certificates(
 
 
 @router.get(
+    "/review-summary",
+    response_model=ReviewSummary,
+    summary="How much is waiting for a reviewer",
+)
+async def get_review_summary(session: SessionDep, scope: WorkspaceScopeDep) -> ReviewSummary:
+    counts = await review_service.review_counts(session, workspace_id=scope.workspace_id)
+    return ReviewSummary(
+        needs_review=counts.needs_review, suspected_duplicates=counts.suspected_duplicates
+    )
+
+
+@router.post(
+    "/{certificate_id}/approve",
+    response_model=CertificateDetail,
+    summary="Accept an entry as it stands",
+    responses={
+        403: {"description": "Approving is an operator's action."},
+        409: {"description": "An unsettled duplicate has to be resolved first."},
+    },
+)
+async def approve_certificate(
+    certificate_id: uuid.UUID,
+    payload: ApproveRequest,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> CertificateDetail:
+    certificate = await review_service.approve_certificate(
+        session, scope=scope, certificate_id=certificate_id, note=payload.note
+    )
+    await record_audit(
+        session,
+        AuditAction.EXTRACTION_APPROVED,
+        audit,
+        entity_type="certificate",
+        entity_id=certificate.id,
+    )
+    await session.commit()
+    return _detail(
+        await certificate_service.load_detail(
+            session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+        )
+    )
+
+
+@router.patch(
+    "/{certificate_id}",
+    response_model=CertificateDetail,
+    summary="Correct what an entry says",
+    responses={
+        403: {"description": "Correcting is an operator's action."},
+        409: {"description": "A superseded entry cannot be corrected."},
+        422: {"description": "A field the schema does not define, or no reason given."},
+    },
+)
+async def correct_certificate(
+    certificate_id: uuid.UUID,
+    payload: CorrectionRequest,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> CertificateDetail:
+    """The previous values are kept, with who changed them and why."""
+    existing = await certificate_service.get_certificate(
+        session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+    )
+    schema = await _schema_for(session, existing)
+    certificate = await review_service.correct_certificate(
+        session,
+        scope=scope,
+        certificate_id=certificate_id,
+        schema=schema,
+        values=payload.values,
+        note=payload.note,
+        approve=payload.approve,
+    )
+    await record_audit(
+        session,
+        AuditAction.CERTIFICATE_UPDATED,
+        audit,
+        entity_type="certificate",
+        entity_id=certificate.id,
+        # Field names only. The values are the personal data this system exists to
+        # protect, and an audit log is read by more people than the register is.
+        metadata={
+            "field_names": sorted(payload.values),
+            "count": len(payload.values),
+        },
+    )
+    await session.commit()
+    return _detail(
+        await certificate_service.load_detail(
+            session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+        )
+    )
+
+
+@router.post(
+    "/{certificate_id}/void",
+    response_model=CertificateDetail,
+    summary="Cancel an entry without removing it",
+    responses={403: {"description": "Only an administrator may void an entry."}},
+)
+async def void_certificate(
+    certificate_id: uuid.UUID,
+    payload: VoidRequest,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> CertificateDetail:
+    """A voided entry stays readable and stays findable by its number.
+
+    Somebody holding the certificate has to be told it was cancelled, and a missing
+    record cannot tell them anything.
+    """
+    certificate = await review_service.void_certificate(
+        session, scope=scope, certificate_id=certificate_id, note=payload.note
+    )
+    await record_audit(
+        session,
+        AuditAction.CERTIFICATE_VOIDED,
+        audit,
+        entity_type="certificate",
+        entity_id=certificate.id,
+    )
+    await session.commit()
+    return _detail(
+        await certificate_service.load_detail(
+            session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+        )
+    )
+
+
+@router.post(
+    "/{certificate_id}/resolve-duplicate",
+    response_model=list[CertificateSummary],
+    summary="Settle whether two entries are one certificate",
+    responses={
+        400: {"description": "An entry cannot be a duplicate of itself."},
+        404: {"description": "One of the entries is not in this register."},
+    },
+)
+async def resolve_duplicate(
+    certificate_id: uuid.UUID,
+    payload: ResolveDuplicateRequest,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> list[CertificateSummary]:
+    """Returns both entries, earlier first. Neither is deleted and no values are merged."""
+    earlier, later = await review_service.resolve_duplicate(
+        session,
+        scope=scope,
+        certificate_id=certificate_id,
+        other_id=payload.other_id,
+        same_certificate=payload.same_certificate,
+        note=payload.note,
+    )
+    await record_audit(
+        session,
+        AuditAction.CERTIFICATE_DUPLICATE_RESOLVED,
+        audit,
+        entity_type="certificate",
+        entity_id=earlier.id,
+        metadata={
+            "related_id": str(later.id),
+            "reason_code": (
+                "same_certificate" if payload.same_certificate else "distinct_certificates"
+            ),
+        },
+    )
+    await session.commit()
+    return [CertificateSummary.model_validate(earlier), CertificateSummary.model_validate(later)]
+
+
+@router.get(
+    "/{certificate_id}/history",
+    response_model=list[RevisionOut],
+    summary="Everything that has happened to an entry",
+)
+async def list_history(
+    certificate_id: uuid.UUID, session: SessionDep, scope: WorkspaceScopeDep
+) -> list[RevisionOut]:
+    """Oldest first, which is how a person reads a history."""
+    revisions = await review_service.list_revisions(
+        session, workspace_id=scope.workspace_id, certificate_id=certificate_id
+    )
+    return [RevisionOut.model_validate(revision) for revision in revisions]
+
+
+@router.get(
     "/{certificate_id}",
     response_model=CertificateDetail,
     summary="One entry in full",
@@ -472,6 +677,10 @@ async def create_certificate(
         source=CertificateSource.MANUAL,
         actor_id=scope.user_id,
         allow_duplicate=payload.allow_duplicate,
+        # Whether a duplicate queues work is the office's setting, not this route's.
+        review=(
+            await workspace_service.read_settings(session, workspace_id=scope.workspace_id)
+        ).review,
     )
     await record_audit(
         session,

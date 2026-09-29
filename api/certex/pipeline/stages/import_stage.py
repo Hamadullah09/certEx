@@ -50,7 +50,13 @@ from certex.imports.reader import (
     read_rows,
 )
 from certex.logging_setup import get_logger
-from certex.services import certificate_service, import_service, schema_service
+from certex.schemas.workspace import ReviewSettings
+from certex.services import (
+    certificate_service,
+    import_service,
+    schema_service,
+    workspace_service,
+)
 from certex.services.import_service import ImportCounts
 from certex.storage.s3 import ObjectStorage, get_object_storage
 
@@ -110,6 +116,7 @@ class _Prepared:
     duplicate_policy: ImportDuplicatePolicy = ImportDuplicatePolicy.SKIP
     workspace_id: uuid.UUID | None = None
     actor_id: uuid.UUID | None = None
+    review: ReviewSettings = field(default_factory=ReviewSettings)
     failure: tuple[str, str] | None = None
 
 
@@ -147,6 +154,7 @@ def _prepare(session: SyncSession, record: CertificateImport) -> _Prepared:
 
     return _Prepared(
         schema=schema,
+        review=workspace_service.review_settings_sync(session, record.workspace_id),
         certificate_type_id=record.certificate_type_id,
         storage_key=record.storage_key,
         delimiter=record.delimiter,
@@ -342,7 +350,8 @@ def _file_row(
             values=row.values,
             source=CertificateSource.IMPORT,
             actor_id=prepared.actor_id,
-            needs_review=False,
+            needs_review=prepared.review.review_imported_records,
+            review=prepared.review,
         )
     except ValidationFailedError as exc:
         return fail("invalid_row", exc.detail or "This row could not be filed.")

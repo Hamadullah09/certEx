@@ -179,6 +179,9 @@ SAFE_KEYS: Final[frozenset[str]] = frozenset(
         "action",
         "entity_type",
         "entity_id",
+        # The other side of a decision about two records - resolving a duplicate,
+        # superseding an entry. An id, like every other key in this list.
+        "related_id",
     }
 )
 
