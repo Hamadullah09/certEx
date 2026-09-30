@@ -1,0 +1,63 @@
+# =============================================================================
+# Production overlay.
+#
+#   docker compose -f docker-compose.yml -f infra/docker-compose.prod.yml up -d
+#
+# The base stack is built for development: it mounts the source over the image so
+# an edit takes effect without a rebuild, and publishes the API and the frontend on
+# host ports so a browser can reach them directly. Both are wrong in production,
+# for different reasons, and this file is only the differences.
+#
+# `!override` rather than an empty list on its own: Compose merges lists from
+# overlay files by default, so `volumes: []` would add nothing and leave the base
+# mounts in place. The tag replaces the base value outright.
+# =============================================================================
+
+services:
+  # Source mounts removed everywhere. Without this a container runs whatever is on
+  # the host's filesystem rather than what was built, tested and tagged - a
+  # deployed release stops being reproducible, and a stray edit on the server is a
+  # silent production change.
+  migrate:
+    volumes: !override []
+
+  api:
+    volumes: !override []
+    # Unpublished on purpose. A reverse proxy terminates TLS and forwards to the
+    # service, which is also what makes `--scale api=N` possible: a fixed host port
+    # would collide on the second replica.
+    ports: !override []
+    expose:
+      - "8000"
+
+  worker:
+    volumes: !override []
+
+  worker-ocr:
+    volumes: !override []
+
+  beat:
+    volumes: !override []
+
+  web:
+    volumes: !override []
+    ports: !override []
+    expose:
+      - "3000"
+
+  # The data stores are reachable on the Compose network and nowhere else. The base
+  # stack publishes them so a developer can attach psql or open the MinIO console;
+  # in production that is the database and every scan on a host port. Maintenance
+  # goes through `docker compose exec`, which is how the backup and restore
+  # commands in the README already work.
+  postgres:
+    ports: !override []
+
+  redis:
+    ports: !override []
+
+  minio:
+    ports: !override []
+    expose:
+      - "9000"
+      - "9001"

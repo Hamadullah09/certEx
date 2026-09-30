@@ -260,6 +260,10 @@ class PageExtractionSource(StrEnum):
 class OcrEngine(StrEnum):
     TESSERACT = "tesseract"
     PADDLEOCR = "paddleocr"
+    """Reserved, not shipped. No image in this repository installs PaddleOCR; the
+    member stays because the value is persisted in ``page_texts.ocr_engine`` and
+    removing it from the check constraint would be a migration for no gain."""
+
     NONE = "none"
 
 

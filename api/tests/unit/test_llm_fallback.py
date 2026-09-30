@@ -439,11 +439,16 @@ class TestClientSelection:
         assert isinstance(client, DisabledClient)
         assert client.enabled is False
 
-    def test_enabled_without_a_key_is_still_disabled(self) -> None:
-        """A half-configured deployment behaves like one with no fallback, rather than
-        failing every document."""
-        client = get_llm_client(Settings(llm_enabled=True))
-        assert isinstance(client, DisabledClient)
+    def test_a_key_that_went_missing_after_boot_still_disables(self) -> None:
+        """Defence behind the boot guard, which is the real protection.
+
+        ``LLM_ENABLED=true`` without a key refuses to start, so this state cannot be
+        reached through configuration - which is why the settings here are built by
+        copying past validation. The branch is kept because a half-configured client
+        should behave like no client rather than failing every document.
+        """
+        settings = enabled_settings().model_copy(update={"llm_api_key": None})
+        assert isinstance(get_llm_client(settings), DisabledClient)
 
     def test_an_unknown_provider_is_disabled_rather_than_guessed_at(self) -> None:
         client = get_llm_client(

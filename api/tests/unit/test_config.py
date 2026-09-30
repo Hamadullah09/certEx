@@ -78,6 +78,29 @@ class TestCoherence:
     def test_kms_requires_key_id(self) -> None:
         with pytest.raises(ValidationError, match="S3_SSE_KMS_KEY_ID"):
             build(s3_sse=S3ServerSideEncryption.AWS_KMS)
+
+    def test_the_llm_fallback_needs_a_key_to_be_switched_on(self) -> None:
+        """Refused at boot rather than degraded at runtime.
+
+        An operator who turned the fallback on and forgot the key would otherwise
+        believe it was running, and the only symptom would be fields quietly not
+        filled in.
+        """
+        with pytest.raises(ValidationError, match="LLM_API_KEY"):
+            build(llm_enabled=True)
+
+    def test_the_llm_fallback_needs_somewhere_to_send_the_request(self) -> None:
+        with pytest.raises(ValidationError, match="LLM_BASE_URL"):
+            build(llm_enabled=True, llm_api_key="k", llm_base_url="  ")
+
+    def test_a_configured_fallback_boots(self) -> None:
+        assert build(llm_enabled=True, llm_api_key="k").llm_enabled is True
+
+    def test_the_fallback_is_off_by_default(self) -> None:
+        """Enabling it sends certificate text to a third party, so it is opt-in."""
+        settings = build()
+        assert settings.llm_enabled is False
+        assert settings.llm_allow_vision is False
         assert build(s3_sse=S3ServerSideEncryption.AWS_KMS, s3_sse_kms_key_id="key-1")
 
     def test_probabilities_are_bounded(self) -> None:

@@ -338,6 +338,18 @@ class Settings(BaseSettings):
         if self.s3_sse is S3ServerSideEncryption.AWS_KMS and not self.s3_sse_kms_key_id:
             raise ValueError("S3_SSE=aws:kms requires S3_SSE_KMS_KEY_ID")
 
+        if self.llm_enabled:
+            # Refused at boot rather than degraded at runtime. An operator who turned
+            # the fallback on and forgot the key would otherwise believe it was
+            # running, and the only symptom would be fields quietly not filled in.
+            if self.llm_api_key is None:
+                raise ValueError(
+                    "LLM_ENABLED=true requires LLM_API_KEY. Set the key, or set "
+                    "LLM_ENABLED=false to run without the fallback."
+                )
+            if not self.llm_base_url.strip():
+                raise ValueError("LLM_ENABLED=true requires LLM_BASE_URL")
+
         if self.app_env is AppEnv.PRODUCTION:
             secret = self.secret_key.get_secret_value()
             if secret.startswith(_INSECURE_SECRET_PREFIX) or len(secret) < 32:

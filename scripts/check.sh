@@ -35,7 +35,10 @@ if [ "${TARGET}" = "all" ] || [ "${TARGET}" = "backend" ]; then
   step "ruff lint"      "${PY}" -m ruff check certex tests
   step "ruff format"    "${PY}" -m ruff format --check certex tests
   step "mypy (strict)"  "${PY}" -m mypy certex
-  step "pytest"         "${PY}" -m pytest -q
+  # The load tests build hundreds of thousands of rows and are run deliberately:
+  #   pytest tests/load -m load
+  # See tests/load/__init__.py for the larger sizes.
+  step "pytest"         "${PY}" -m pytest -q -m "not load"
 fi
 
 if [ "${TARGET}" = "all" ] || [ "${TARGET}" = "frontend" ]; then
