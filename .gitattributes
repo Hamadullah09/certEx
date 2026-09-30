@@ -28,6 +28,9 @@ healthcheck-*   text eol=lf
 *.yaml          text eol=lf
 *.toml          text eol=lf
 *.ini           text eol=lf
+# LF deliberately, though these are Windows scripts: PowerShell reads either, and a
+# file that is LF everywhere cannot produce a diff that is only line endings.
+*.ps1           text eol=lf
 *.mako          text eol=lf
 *.sql           text eol=lf
 .env.example    text eol=lf

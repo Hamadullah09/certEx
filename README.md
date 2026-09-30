@@ -92,6 +92,22 @@ cp .env.example .env
 docker compose up
 ```
 
+On Windows, two PowerShell wrappers do the same thing and say more about it:
+
+```powershell
+./scripts/run.ps1                                # start, detached, and print the URLs
+./scripts/run.ps1 -Build                         # rebuild the images first
+./scripts/run.ps1 -Service postgres, redis, minio    # just the data stores, for the test suite
+./scripts/stop.ps1                               # stop; the register and the scans are kept
+./scripts/stop.ps1 -Volumes                      # start over from an empty register (asks first)
+```
+
+`run.ps1` checks the engine is actually up rather than only installed, creates `.env`
+on a first run, and reads the ports back out of it — so the URLs it prints are the ones
+that work on your machine rather than the defaults. `stop.ps1` keeps the volumes unless
+you ask for otherwise, and asks twice when you do, because that flag deletes the
+register.
+
 That brings up Postgres, Redis, MinIO, the API, two classes of Celery worker, the
 scheduler and the frontend; applies migrations; verifies the schema matches the
 models; provisions the storage bucket; proves server-side encryption actually
@@ -439,6 +455,10 @@ api/                  FastAPI app + the shared `certex` package
     load/               the register at 10k / 100k / 1M entries
 worker/               Celery entry point and task wrappers
 web/                  Next.js frontend
+scripts/
+  run.ps1               start the stack and print where it is (Windows)
+  stop.ps1              stop it; keeps the data unless told otherwise
+  check.sh              every quality gate the project enforces
 infra/
   docker-compose.yml    the canonical stack definition
   alembic/              migrations
