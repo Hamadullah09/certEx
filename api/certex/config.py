@@ -184,6 +184,16 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_upload_per_minute: int = Field(default=120, ge=1)
     rate_limit_export_per_minute: int = Field(default=10, ge=1)
+    rate_limit_search_per_minute: int = Field(default=120, ge=1)
+    """Searching is cheap per query and expensive in aggregate: a name search over a
+    million-row register is several indexed lookups, and a script running them as fast
+    as it can is a way to read the whole register. Generous enough that a busy counter
+    never notices."""
+
+    rate_limit_import_per_hour: int = Field(default=20, ge=1)
+    """Imports are hours of worker time each. Per hour rather than per minute, because
+    the thing worth bounding is how much work one account can queue, not how fast."""
+
     rate_limit_login_per_minute: int = Field(default=10, ge=1)
     rate_limit_default_per_minute: int = Field(default=600, ge=1)
 

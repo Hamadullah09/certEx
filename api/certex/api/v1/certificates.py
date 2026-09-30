@@ -26,8 +26,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from certex.core.audit import record_audit
-from certex.core.deps import AuditContextDep, SessionDep, WorkspaceScopeDep
+from certex.core.deps import (
+    AuditContextDep,
+    SessionDep,
+    SettingsDep,
+    WorkspaceScopeDep,
+)
 from certex.core.errors import BadRequestError, NotFoundError, ValidationFailedError
+from certex.core.ratelimit import get_rate_limiter
 from certex.db.models import Certificate, CertificateDocument, CertificateTypeRecord, Document
 from certex.enums import (
     AuditAction,
@@ -233,6 +239,7 @@ async def _stream_register(
 async def export_register(
     session: SessionDep,
     scope: WorkspaceScopeDep,
+    settings: SettingsDep,
     audit: AuditContextDep,
     certificate_type_id: Annotated[
         uuid.UUID, Query(description="Which register to export. One type per file.")
@@ -251,6 +258,11 @@ async def export_register(
     the download a page at a time, so the file size is bounded by the register and the
     memory used is not.
     """
+    decision = await get_rate_limiter().check(
+        "export", str(scope.user_id), limit=settings.rate_limit_export_per_minute
+    )
+    decision.raise_if_denied(what="exports")
+
     separator = DELIMITERS.get(delimiter)
     if separator is None:
         raise BadRequestError(
@@ -309,6 +321,7 @@ async def export_register(
 async def search_certificates(
     session: SessionDep,
     scope: WorkspaceScopeDep,
+    settings: SettingsDep,
     q: Annotated[
         str | None,
         Query(
@@ -336,6 +349,11 @@ async def search_certificates(
     here are three people with that name" is a different answer from "here is the
     certificate", and a clerk needs to know which one they are looking at.
     """
+    decision = await get_rate_limiter().check(
+        "search", str(scope.user_id), limit=settings.rate_limit_search_per_minute
+    )
+    decision.raise_if_denied(what="searches")
+
     results = await search_service.search(
         session,
         workspace_id=scope.workspace_id,

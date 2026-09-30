@@ -24,6 +24,7 @@ from certex.core.deps import (
     WorkspaceScopeDep,
 )
 from certex.core.errors import BadRequestError, NotFoundError, PayloadTooLargeError
+from certex.core.ratelimit import get_rate_limiter
 from certex.db.models import CertificateTypeRecord
 from certex.enums import AuditAction, CertificateType, ImportDuplicatePolicy, UserRole
 from certex.fields import FieldSchema, builtin_schema
@@ -137,6 +138,16 @@ async def create_import(
 ) -> ImportSummary:
     """Accept the file and queue it. The response is the import to poll, not a result."""
     scope.require(UserRole.OPERATOR)
+
+    # Each import is potentially hours of worker time, so what is bounded here is how
+    # much work one account can queue, not how fast it can ask.
+    decision = await get_rate_limiter().check(
+        "import",
+        str(scope.user_id),
+        limit=settings.rate_limit_import_per_hour,
+        window_seconds=3600,
+    )
+    decision.raise_if_denied(what="imports")
 
     _record, _schema, version_id = await _schema_for_type(session, scope, certificate_type_id)
 
