@@ -6,18 +6,23 @@ measured directly against hand-labelled documents, which is what the golden accu
 tests do.
 
 Order of business: the template reads what it knows, the rules engine reads everything,
-the merge decides between them, and each surviving value is rewritten in the canonical
-form its field kind calls for.
+the merge decides between them, an optional model fallback is asked about whatever is
+still missing, and each surviving value is rewritten in the canonical form its field kind
+calls for.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from certex.enums import CertificateType, ExtractionMethod
+from certex.config import Settings
+from certex.enums import CertificateType, ExtractionMethod, ValidationFlag
 from certex.fields import FieldSchema, schema_or_builtin
+from certex.llm.client import LLMClient
 from certex.pipeline.extract.candidates import Candidate
+from certex.pipeline.extract.llm_fallback import FallbackResult, run_llm_fallback
 from certex.pipeline.extract.merge import merge_candidates
 from certex.pipeline.extract.rules import UnitPage, extract_extra_fields, extract_with_rules
 from certex.pipeline.extract.templates import apply_template
@@ -33,6 +38,12 @@ class ExtractedFields:
 
     fields: dict[str, Candidate] = field(default_factory=dict)
     extras: dict[str, Candidate] = field(default_factory=dict)
+    flags: tuple[ValidationFlag, ...] = ()
+    """What the reader wants said about this row - a value it could not verify, a
+    fallback that was unavailable. Validation adds its own on top."""
+
+    unverified_fields: tuple[str, ...] = ()
+    """Fields whose value could not be found in the document it was read from."""
 
     @property
     def template_used(self) -> bool:
@@ -71,17 +82,43 @@ def extract_fields(
     certificate_type: CertificateType,
     template_rules: TemplateRules | None = None,
     schema: FieldSchema | None = None,
+    workspace_id: uuid.UUID | None = None,
+    settings: Settings | None = None,
+    llm_client: LLMClient | None = None,
 ) -> ExtractedFields:
     """Read every field of a certificate, and anything else it labels.
 
     ``schema`` is the version the batch was created under. Without one the
     built-in definition for the classified type is used instead.
+
+    The layers run cheapest-first and each only fills what the last one left: the
+    template reads what it knows, the rules engine reads everything it can, and the
+    optional model fallback is asked about whatever is still empty. A deployment with
+    no fallback configured stops after the rules engine, which is the default.
     """
     active = schema_or_builtin(certificate_type, schema)
     template_layer = apply_template(pages, template_rules) if template_rules else {}
     rules_layer = extract_with_rules(pages, certificate_type=certificate_type, schema=active)
     merged = _normalise(merge_candidates(template_layer, rules_layer), active)
+
+    fallback = FallbackResult()
+    if workspace_id is not None:
+        fallback = run_llm_fallback(
+            pages,
+            schema=active,
+            found=merged,
+            workspace_id=workspace_id,
+            settings=settings,
+            client=llm_client,
+        )
+        if fallback.candidates:
+            # Merged through the same function as the other layers, so the fallback
+            # cannot outrank a rule or a template by arriving later.
+            merged = _normalise(merge_candidates(merged, fallback.candidates), active)
+
     return ExtractedFields(
         fields=merged,
         extras=extract_extra_fields(pages, certificate_type=certificate_type, schema=active),
+        flags=fallback.flags,
+        unverified_fields=fallback.unverified_fields,
     )

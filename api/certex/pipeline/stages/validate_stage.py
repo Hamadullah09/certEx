@@ -20,7 +20,11 @@ from certex.config import Settings, get_settings
 from certex.db.base import utcnow
 from certex.db.models import CertificateUnit, Extraction
 from certex.db.session import session_scope
-from certex.enums import ReviewStatus, UnitStatus
+from certex.enums import (
+    ReviewStatus,
+    UnitStatus,
+    ValidationFlag,
+)
 from certex.logging_setup import get_logger
 from certex.pipeline.dispatch import TASK_FINALIZE_DOCUMENT, Dispatch, enqueue
 from certex.pipeline.validate.confidence import route_row, score_row
@@ -54,6 +58,21 @@ def _printed_values(sources: dict[str, Any]) -> dict[str, str]:
             if isinstance(snippet, str):
                 printed[name] = snippet
     return printed
+
+
+_READER_FLAGS: frozenset[str] = frozenset(
+    {ValidationFlag.VALUE_UNVERIFIED.value, ValidationFlag.LLM_UNAVAILABLE.value}
+)
+"""Flags the extract stage raises that validation cannot work out for itself.
+
+Named explicitly rather than "keep whatever was there": validation is the authority on
+everything it checks, so a stale flag from a previous run of its own must not survive a
+re-run - only the reader's observations about how a value was obtained.
+"""
+
+
+def _reader_flag(value: object) -> bool:
+    return isinstance(value, str) and value in _READER_FLAGS
 
 
 def run_validate_unit_stage(
@@ -115,7 +134,17 @@ def run_validate_unit_stage(
 
         # Explicitly typed lists: the JSONB columns are list[object], and a narrower
         # comprehension does not satisfy them.
-        flag_values: list[object] = [flag.value for flag in outcome.flags]
+        #
+        # Added to what the reader already flagged rather than replacing it. The extract
+        # stage raises flags validation cannot re-derive - a value the model fallback
+        # could not find in the document, a fallback that was unavailable - and
+        # overwriting them here would drop exactly the warnings that say a value is not
+        # to be trusted. Order is kept and duplicates are dropped, so re-running
+        # validation converges instead of growing the list.
+        reader_flags = [str(value) for value in row.flags_jsonb if _reader_flag(value)]
+        flag_values: list[object] = list(
+            dict.fromkeys([*reader_flags, *(flag.value for flag in outcome.flags)])
+        )
         issues: list[object] = list(outcome.as_json())
         row.flags_jsonb = flag_values
         row.field_issues_jsonb = issues

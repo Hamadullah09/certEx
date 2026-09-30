@@ -165,6 +165,50 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- LLM fallback ---------------------------------------------------------
+    # Off by default, and deliberately so. Enabling it sends the text of a
+    # certificate - somebody's name, their parents' names, their identity number -
+    # to a third party. That is an office's decision to take knowingly, not a
+    # default to inherit, so nothing here has an effect until llm_enabled is set
+    # and a key is supplied.
+    llm_enabled: bool = False
+    llm_provider: str = Field(
+        default="anthropic",
+        description="Which provider implements the fallback. Only anthropic ships today.",
+    )
+    llm_api_key: SecretStr | None = None
+    llm_model: str = "claude-sonnet-5-5"
+    llm_base_url: str = "https://api.anthropic.com"
+    llm_max_output_tokens: int = Field(default=2048, ge=256, le=16384)
+    llm_timeout_seconds: float = Field(default=45.0, gt=0, le=600)
+    llm_max_source_chars: int = Field(
+        default=12_000,
+        ge=500,
+        description=(
+            "How much of a certificate's text is sent. A certificate is a page; this "
+            "bounds what one malformed document can cost and what one request can "
+            "disclose."
+        ),
+    )
+    llm_max_fields_per_request: int = Field(default=40, ge=1, le=200)
+    llm_allow_vision: bool = Field(
+        default=False,
+        description=(
+            "Send the page image as well as its text. Off by default: an image of a "
+            "certificate discloses everything on it, including what the pipeline "
+            "never read, so it is a second decision after enabling the fallback."
+        ),
+    )
+    llm_cache_enabled: bool = True
+    llm_cache_ttl_seconds: int = Field(default=604_800, ge=60)
+    """A week. The same certificate is re-read more often than it looks - a batch
+    reprocessed after a template fix, a document uploaded twice - and a cache hit is
+    the difference between a free re-read and paying for it again."""
+
+    llm_max_attempts: int = Field(default=2, ge=1, le=5)
+    """Attempts per request, including the first. The fallback is the last layer, so
+    giving up is a flag on a row rather than a failed document."""
+
     # -- Confidence thresholds ------------------------------------------------
     confidence_auto_approve: Probability = 1.00
     """Row confidence at which a row is exported without anyone looking at it.

@@ -25,7 +25,13 @@ from certex.config import Settings
 from certex.db.base import utcnow
 from certex.db.models import CertificateUnit, Document, Extraction, PageText, Template
 from certex.db.session import session_scope
-from certex.enums import CertificateType, ExtractionMethod, ReviewStatus, UnitStatus
+from certex.enums import (
+    CertificateType,
+    ExtractionMethod,
+    ReviewStatus,
+    UnitStatus,
+    ValidationFlag,
+)
 from certex.fields import FIELD_SCHEMA_VERSION
 from certex.logging_setup import get_logger, safe_error
 from certex.pipeline.dispatch import TASK_VALIDATE_UNIT, Dispatch, enqueue
@@ -149,6 +155,7 @@ def _write_row(
     extras: dict[str, Candidate],
     *,
     template_id: uuid.UUID | None,
+    flags: tuple[ValidationFlag, ...] = (),
 ) -> bool:
     """Replace this unit's row. False when another run claimed the unit first."""
     fields: dict[str, Any] = {name: candidate.value for name, candidate in merged.items()}
@@ -185,6 +192,10 @@ def _write_row(
         row.field_methods_jsonb = methods
         row.field_sources_jsonb = sources
         row.extra_fields_jsonb = extra_values
+        # What the reader itself wants said - a value the fallback could not verify, a
+        # fallback that was unavailable. Validation adds its own flags on top of these
+        # rather than replacing them, so a warning raised here is not lost.
+        row.flags_jsonb = [flag.value for flag in flags]
         # Confidence and routing are decided by validation, which reads these values
         # and the flags they raise; until then the row is explicitly unreviewed.
         row.row_confidence = 0.0
@@ -233,6 +244,10 @@ def run_extract_unit_stage(
         certificate_type=data.certificate_type,
         template_rules=template_rules,
         schema=schema,
+        # Passing the workspace is what lets the model fallback run: it scopes the
+        # answer cache, and a layer that costs money should not be reachable from a
+        # code path that has no office to bill it to.
+        workspace_id=data.workspace_id,
     )
     if not _write_row(
         unit_id,
@@ -240,6 +255,7 @@ def run_extract_unit_stage(
         extracted.fields,
         extracted.extras,
         template_id=template_id if extracted.template_used else None,
+        flags=extracted.flags,
     ):
         return ExtractStageResult(unit_id=unit_id, ran=False)
 
