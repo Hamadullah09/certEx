@@ -847,6 +847,23 @@ dependency cannot make the probe itself hang.
 
 ---
 
+## When something will not start
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `worker`, `worker-ocr` and `beat` all in `Restarting (127)`, logs saying `/usr/bin/env: 'bash
+'` | the image was built from a clone that checked the entrypoints out with CRLF, before [`.gitattributes`](.gitattributes) pinned them to LF | `docker compose build worker` — the working copy is already LF, so a rebuild is the whole fix |
+| `docker compose up` exits immediately on `migrate` | the schema and the models disagree, which `migrate` checks on purpose | `docker compose logs migrate`; usually a migration that was never generated for a model change |
+| everything healthy but the frontend cannot reach the API | `CORS_ORIGINS` or `NEXT_PUBLIC_API_BASE_URL` still points at the default port after `API_PORT` or `WEB_PORT` moved | set both to the ports in use |
+| an import stuck in `RUNNING` | a worker was killed mid-file | upload the same file again; rows already filed are detected as duplicates of themselves and skipped |
+| `docker compose down` leaves the network behind | something outside the stack is attached to it | `docker network inspect certex_default` names the container |
+
+`docker compose ps` is the first thing to read: a container in `Restarting` is a
+different problem from one that is `Up (unhealthy)`, and the logs for the two say
+different things.
+
+---
+
 ## Operational CLI
 
 ```bash
@@ -910,3 +927,19 @@ the provenance without being able to show the image.
 **Two office-level settings are still per batch.** OCR languages and expected certificate
 types are chosen when a batch is created, not in Settings. The review thresholds moved to
 the workspace; these have not.
+
+---
+
+## Verified end to end
+
+The whole stack was run and driven through the API: a birth certificate PDF uploaded to a
+batch, the batch started, the pipeline read it from its text layer, classified it,
+extracted its fields, validated them and published the entry — then the same certificate
+was found by searching for the name, which reported it as one of two entries sharing that
+name. A record typed in through `POST /certificates` was found by a differently formatted
+version of its number.
+
+That run also found the last real defect: all three worker containers were in a restart
+loop on exit 127, because the image had been built from a clone that checked the
+entrypoints out with CRLF. The working copy was already LF; a rebuild was the whole fix,
+and it is now the first row of *When something will not start*.
