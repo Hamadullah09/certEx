@@ -175,6 +175,9 @@ async def db_engine(require_postgres: None):
         # exist before create_all. The migration does the same thing for a real
         # database; doing it here keeps the models and the schema in agreement.
         await connection.execute(sqlalchemy_text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        # btree_gin lets the workspace live inside the trigram indexes, which is what
+        # keeps a similarity search from scanning one office's whole register.
+        await connection.execute(sqlalchemy_text("CREATE EXTENSION IF NOT EXISTS btree_gin"))
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
     yield engine

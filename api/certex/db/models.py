@@ -830,13 +830,21 @@ class Certificate(Base, TimestampMixin):
         ),
         Index("ix_certificates_type_event", "workspace_id", "certificate_type_id", "event_date"),
         Index("ix_certificates_name_key", "workspace_id", "primary_name_key"),
-        # Trigram, so a misspelled or differently transliterated name still finds
-        # its record. A B-tree on the same column only answers prefix queries.
+        # Trigram, so a misspelled or differently transliterated name still finds its
+        # record; a B-tree on the same column only answers prefix queries.
+        #
+        # The workspace is *inside* the index, through btree_gin. Every query here is
+        # scoped to one office, and a trigram index on the name alone cannot satisfy
+        # that scope - the planner uses the workspace index instead and applies the
+        # similarity as a filter, which means computing it for every entry the office
+        # holds. Measured at ten thousand rows and confirmed by the plan assertions in
+        # tests/load.
         Index(
             "ix_certificates_name_key_trgm",
+            "workspace_id",
             "primary_name_key",
             postgresql_using="gin",
-            postgresql_ops={"primary_name_key": "gin_trgm_ops"},
+            postgresql_ops={"workspace_id": "uuid_ops", "primary_name_key": "gin_trgm_ops"},
         ),
         Index(
             "ix_certificates_duplicates",
@@ -1084,11 +1092,13 @@ class CertificateName(Base):
         ),
         Index("ix_certificate_names_key", "workspace_id", "value_key"),
         Index("ix_certificate_names_role_key", "workspace_id", "role", "value_key"),
+        # Workspace-scoped for the same reason as the one on ``certificates``.
         Index(
             "ix_certificate_names_key_trgm",
+            "workspace_id",
             "value_key",
             postgresql_using="gin",
-            postgresql_ops={"value_key": "gin_trgm_ops"},
+            postgresql_ops={"workspace_id": "uuid_ops", "value_key": "gin_trgm_ops"},
         ),
         CheckConstraint("value_key <> ''", name="certificate_name_key_is_present"),
     )
