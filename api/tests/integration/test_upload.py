@@ -173,10 +173,23 @@ class TestDeduplication:
         ).all()
         assert len({row.storage_key for row in rows}) == 1
 
-    async def test_duplicate_across_batches_in_the_same_workspace(
+    async def test_the_same_file_in_another_batch_is_not_a_duplicate(
         self, api_client: AsyncClient, operator_user, object_storage, fixture_dir: Path
     ) -> None:
-        """A records office re-uploads the same folder into a new batch constantly."""
+        """Deliberately not deduplicated, because a batch carries its own columns.
+
+        This used to be treated as a duplicate, to save re-reading a folder somebody
+        uploaded twice. It cannot be: the second batch may extract a different set of
+        fields, and the row the first batch produced is not a row this one can use. The
+        document was attached and silently never read, so the second batch exported
+        nothing.
+
+        What it costs is small. The OCR cache is keyed by page image, so reading the
+        same bytes again skips Tesseract and pays only for the rules engine.
+
+        Within one batch the same file twice is still one document - see the test
+        above, which is the case this check exists for.
+        """
         await authenticate(api_client, operator_user)
         pdf = build_text_pdf(fixture_dir / "a.pdf")
 
@@ -187,7 +200,8 @@ class TestDeduplication:
         response = await api_client.post(
             f"/api/v1/batches/{second_batch}/files", files=files_payload(pdf)
         )
-        assert response.json()[0]["is_duplicate"] is True
+        assert response.json()[0]["is_duplicate"] is False
+        assert response.json()[0]["status"] == DocumentStatus.QUEUED.value
 
     async def test_a_different_file_is_not_a_duplicate(
         self, api_client: AsyncClient, operator_user, object_storage, fixture_dir: Path

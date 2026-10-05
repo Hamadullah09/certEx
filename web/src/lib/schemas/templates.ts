@@ -3,13 +3,11 @@ import { z } from "zod";
 import { certificateTypeSchema, pageSchema } from "@/lib/schemas/batches";
 
 /**
- * A learned extraction template, as the templates screen would list it.
+ * A learned extraction template, as the templates screen lists it.
  *
- * There is no `GET /templates` on the API yet. This schema mirrors the
- * `templates` table the pipeline already writes (name, layout fingerprint,
- * certificate type, rule set, hit count, active flag) so that when the route
- * lands the client parses it rather than being rewritten - and so the screen can
- * be honest in the meantime instead of showing invented rows.
+ * One row of the `templates` table the extraction stage writes: the form's name, its
+ * layout fingerprint, the certificate type it belongs to, how many fields it knows
+ * where to find, and how many certificates it has been applied to.
  */
 export const templateSummarySchema = z.object({
   id: z.string().uuid(),

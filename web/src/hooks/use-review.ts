@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { registerKeys } from "@/hooks/use-register";
+import { SESSION_QUERY_KEY } from "@/hooks/use-session";
 import { apiFetch } from "@/lib/api";
 import {
   type CertificateDetail,
@@ -146,6 +147,30 @@ export function useSaveWorkspaceSettings() {
       queryClient.setQueryData(reviewKeys.settings, settings);
       // The thresholds decide what queues, so the badge may be wrong now.
       void queryClient.invalidateQueries({ queryKey: reviewKeys.summary });
+    },
+  });
+}
+
+
+/**
+ * Rename the office.
+ *
+ * The name a deployment starts with is whatever the seeding script was given - "Demo
+ * Records Office" unless somebody set it - and it shows on every screen and in every
+ * exported filename, so an office needs to be able to change it.
+ */
+export function useRenameWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation<{ id: string; name: string }, Error, string>({
+    mutationFn: (name) =>
+      apiFetch(
+        "/api/v1/workspace/name",
+        z.object({ id: z.string().uuid(), name: z.string() }),
+        { method: "PUT", body: { name } },
+      ),
+    onSuccess: () => {
+      // The header reads the office name from the session.
+      void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
     },
   });
 }

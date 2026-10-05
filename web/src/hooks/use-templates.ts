@@ -11,12 +11,12 @@ export const templateKeys = {
 };
 
 /**
- * What the templates screen was able to learn.
+ * What this workspace has learned.
  *
- * `GET /templates` is not on the API yet. A missing route answers 404 or 405, and
- * that is a different fact from "this workspace has learned no templates" - a
- * reviewer told the wrong one would wait for something that is never coming. The
- * two are kept apart here so the screen can say which it is.
+ * The two outcomes are kept apart on purpose. A route that answers 404 or 405 is an
+ * API older than this build, and that is a different fact from "this workspace has
+ * learned no templates yet" - a reviewer told the wrong one would either wait for
+ * something that is never coming, or go correcting forms to fix a version mismatch.
  */
 export type TemplatesResult =
   | { status: "ready"; items: TemplateSummary[]; total: number | null }
@@ -29,7 +29,7 @@ export function useTemplates() {
     queryKey: templateKeys.list(),
     queryFn: async () => {
       try {
-        const page = await apiFetch("/api/v1/templates?limit=100", templatePageSchema);
+        const page = await apiFetch("/api/v1/templates?limit=100&include_total=true", templatePageSchema);
         return { status: "ready", items: page.items, total: page.meta.total ?? null };
       } catch (error) {
         if (error instanceof ApiError && ROUTE_MISSING_STATUSES.has(error.status)) {

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { fieldKindSchema, fieldRoleSchema } from "@/lib/schemas/registry";
+
 /**
  * Client-side mirrors of the server's Pydantic models.
  *
@@ -73,9 +75,33 @@ export const batchSummarySchema = z.object({
 });
 export type BatchSummary = z.infer<typeof batchSummarySchema>;
 
+/**
+ * One column of a batch: a field every document in it is read for.
+ *
+ * Fixed when the batch was created. The screens treat this as the truth about what the
+ * batch holds - the grid headings, the CSV columns and the fields offered in its search
+ * all come from here, so a batch with columns nobody else has still renders correctly.
+ */
+export const batchColumnSchema = z.object({
+  /** Machine key: the CSV header and the JSON key. */
+  name: z.string(),
+  label: z.string(),
+  kind: fieldKindSchema,
+  role: fieldRoleSchema.default("none"),
+  required: z.boolean().default(false),
+  searchable: z.boolean().default(false),
+  position: z.number().int(),
+});
+export type BatchColumn = z.infer<typeof batchColumnSchema>;
+
 export const batchDetailSchema = batchSummarySchema.extend({
   settings: batchSettingsSchema,
   error_message: z.string().nullish(),
+  certificate_type_id: z.string().uuid().nullish(),
+  description: z.string().nullish(),
+  year: z.number().int().nullish(),
+  registration_office: z.string().nullish(),
+  columns: z.array(batchColumnSchema).default([]),
 });
 export type BatchDetail = z.infer<typeof batchDetailSchema>;
 

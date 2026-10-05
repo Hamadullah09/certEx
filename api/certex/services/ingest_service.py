@@ -210,18 +210,32 @@ def hash_local_file(
 
 
 async def _find_duplicate(
-    session: AsyncSession, *, workspace_id: uuid.UUID, sha256: str
+    session: AsyncSession, *, workspace_id: uuid.UUID, batch_id: uuid.UUID, sha256: str
 ) -> Document | None:
-    """Find a previously ingested document with identical bytes.
+    """Find a previously ingested document with identical bytes **in this batch**.
 
-    Scoped to the workspace: identical files in two tenants are two documents, and
-    surfacing one across the boundary would leak the existence of the other.
-    Chains are collapsed so a duplicate always points at the original.
+    Scoped to the batch rather than to the whole workspace, which is a correctness
+    requirement and not a convenience. A batch carries its own extraction columns, so
+    the same scan filed into two batches has to be read twice - once under each set of
+    columns. Deduplicating across batches silently left the second batch with the
+    document attached and no record at all, because the row it would have produced
+    belonged to the other batch's schema.
+
+    Within one batch it still catches what it is for: the same file dragged in twice.
+
+    Re-reading identical bytes is cheap in the place it would be expensive - the OCR
+    cache is keyed by page image, so the second batch pays for the rules engine and
+    not for Tesseract.
+
+    The workspace is still in the query. Identical files in two tenants are two
+    documents, and matching one across that boundary would leak the existence of the
+    other. Chains are collapsed so a duplicate always points at the original.
     """
     existing = await session.scalar(
         select(Document)
         .where(
             Document.workspace_id == workspace_id,
+            Document.batch_id == batch_id,
             Document.sha256 == sha256,
             Document.status != DocumentStatus.FAILED,
         )
@@ -397,7 +411,9 @@ async def _ingest_spooled(
             )
 
         # -- deduplicate before spending a storage write ----------------------
-        duplicate = await _find_duplicate(session, workspace_id=workspace_id, sha256=spooled.sha256)
+        duplicate = await _find_duplicate(
+            session, workspace_id=workspace_id, batch_id=batch.id, sha256=spooled.sha256
+        )
         if duplicate is not None:
             return await _record_duplicate(
                 session,

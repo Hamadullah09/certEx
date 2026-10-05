@@ -2,13 +2,16 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { BookOpen, FileStack, LayoutTemplate, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { FileStack, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLogout, useSession } from "@/hooks/use-session";
+import { UserMenu } from "@/components/user-menu";
+import { useCertificateTypes } from "@/hooks/use-register";
+import { useSession } from "@/hooks/use-session";
+import { categoryLook } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 
 const appName = process.env.NEXT_PUBLIC_APP_NAME ?? "CertExtract";
@@ -58,8 +61,9 @@ export function AppShell({
   wide?: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { data: session, isPending } = useSession();
-  const logout = useLogout();
+  const categories = useCertificateTypes();
 
   React.useEffect(() => {
     if (!isPending && session === null) router.replace("/login");
@@ -78,7 +82,7 @@ export function AppShell({
 
   return (
     <div className="min-h-dvh">
-      <header className="sticky top-0 z-30 border-b-2 border-border bg-background/92 backdrop-blur-md">
+      <header className="z-30 border-b-2 border-border bg-background/92 backdrop-blur-md sm:sticky sm:top-0">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
           <Link
             href="/"
@@ -86,55 +90,64 @@ export function AppShell({
           >
             <span
               aria-hidden="true"
-              className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-soft"
+              className="flex size-11 items-center justify-center rounded-xl bg-linear-to-br from-category-birth via-primary to-category-marriage text-white shadow-soft ring-1 ring-white/25"
             >
               <FileStack className="size-6" />
             </span>
-            <span>{appName}</span>
+            <span className="hidden sm:inline">{appName}</span>
           </Link>
 
-          {/* Plain words, and links rather than icons alone: the places this app
-              goes have to be readable at a glance from across a desk. The register
-              comes first because looking a certificate up is what happens all day;
-              uploading a batch of scans happens once a week. */}
-          <nav aria-label="Main" className="order-3 flex items-center gap-1 sm:order-none">
-            {[
-              { href: "/register", label: "Register", Icon: BookOpen },
-              { href: "/", label: "Batches", Icon: FileStack },
-              { href: "/templates", label: "Templates", Icon: LayoutTemplate },
-              { href: "/settings", label: "Settings", Icon: Settings },
-            ].map(({ href, label, Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                className="flex min-h-11 items-center gap-2 rounded-lg px-3 text-base font-semibold text-foreground hover:bg-accent hover:text-accent-foreground"
-              >
-                <Icon aria-hidden="true" className="size-5" />
-                {label}
-              </Link>
-            ))}
+          {/* The categories are the navigation. Everything a clerk does starts by
+              choosing what kind of certificate they are holding, so that choice is the
+              top level rather than something reached through a list of batches.
+
+              Each carries its own colour and its own icon, because this is the control
+              used dozens of times a day and four identical grey links have to be read
+              every single time. The selected one is filled rather than tinted - at a
+              glance across a desk, a tint and a hover state look the same.
+
+              Read from the server rather than written out here: these four are what a
+              workspace is seeded with, and an office that adds a fifth gets it in the
+              navigation without a new release. */}
+          <nav
+            aria-label="Certificate categories"
+            className="flex flex-wrap items-center gap-1.5 rounded-xl bg-muted/70 p-1.5"
+          >
+            {categories.isPending
+              ? [0, 1, 2, 3].map((index) => (
+                  <Skeleton key={index} className="h-11 w-28 rounded-lg" />
+                ))
+              : (categories.data ?? []).map((category) => {
+                  const href = `/categories/${category.id}`;
+                  const look = categoryLook(category.classifier_key);
+                  const current = pathname.startsWith(href);
+                  return (
+                    <Link
+                      key={category.id}
+                      href={href}
+                      aria-current={current ? "page" : undefined}
+                      className={cn(
+                        "flex min-h-11 items-center gap-2 whitespace-nowrap rounded-lg px-3.5 text-base font-bold transition-colors",
+                        current
+                          ? cn(look.fill, "text-white shadow-soft")
+                          : cn("text-foreground", look.hover),
+                      )}
+                    >
+                      <look.Icon
+                        aria-hidden="true"
+                        className={cn("size-5", current ? "text-white" : look.ink)}
+                      />
+                      {category.name}
+                    </Link>
+                  );
+                })}
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {/* Which workspace and which account - the two facts an operator
                 double-checks before uploading someone's records. */}
-            <div className="hidden min-w-0 text-right sm:block">
-              <p className="truncate text-base font-semibold text-foreground">
-                {session.workspace.name}
-              </p>
-              <p className="truncate text-sm text-muted-foreground">
-                {session.user.email} · {session.user.role.toLowerCase()}
-              </p>
-            </div>
             <ThemeToggle />
-            <Button
-              variant="outline"
-              onClick={() => logout.mutate()}
-              disabled={logout.isPending}
-            >
-              <LogOut aria-hidden="true" />
-              <span className="hidden sm:inline">Sign out</span>
-            </Button>
+            <UserMenu session={session} />
           </div>
         </div>
       </header>

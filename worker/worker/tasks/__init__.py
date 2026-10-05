@@ -9,6 +9,6 @@ Importing this package registers every task with the Celery app.
 
 from __future__ import annotations
 
-from worker.tasks import extract, imports, ocr, split, text, validate
+from worker.tasks import extract, imports, learn, ocr, split, text, validate
 
-__all__ = ["extract", "imports", "ocr", "split", "text", "validate"]
+__all__ = ["extract", "imports", "learn", "ocr", "split", "text", "validate"]

@@ -21,10 +21,49 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCertificate, useDuplicateCandidates } from "@/hooks/use-register";
+import { useCertificate, useDuplicateCandidates, useSchemaVersion } from "@/hooks/use-register";
 import { apiBaseUrl, ApiError } from "@/lib/api";
+import { COMMON_FIELDS } from "@/lib/schemas/fields.generated";
 import type { DocumentLink, DuplicateCandidate } from "@/lib/schemas/certificates";
 import { valueTextAttributes } from "@/lib/text-direction";
+
+/**
+ * What to call a field on screen.
+ *
+ * In order of authority: the schema the entry was filed under, then the built-in
+ * fields this build knows, then the machine name tidied up. The last one is a fallback
+ * and looks like one - it is there so an unknown field still appears rather than being
+ * dropped, which is the one outcome a register cannot have.
+ */
+function labelFor(name: string, fromSchema: Map<string, string>): string {
+  const defined = fromSchema.get(name);
+  if (defined) return defined;
+  const builtIn = COMMON_FIELDS.find((spec) => spec.name === name);
+  if (builtIn) return builtIn.label;
+  const spaced = name.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * The order the certificate itself is laid out in.
+ *
+ * `values` is a JSON object, so its key order is whatever the pipeline happened to
+ * write. Reading a birth certificate that starts at "sex" and puts the child's name
+ * seventh is needlessly hard, and the schema already knows the order a clerk expects.
+ */
+function inSchemaOrder(names: string[], order: Map<string, number>): string[] {
+  return [...names].sort((left, right) => {
+    const leftPosition = order.get(left);
+    const rightPosition = order.get(right);
+    if (leftPosition !== undefined && rightPosition !== undefined) {
+      return leftPosition - rightPosition;
+    }
+    // Anything the schema does not mention sorts after everything it does.
+    if (leftPosition !== undefined) return -1;
+    if (rightPosition !== undefined) return 1;
+    return left.localeCompare(right);
+  });
+}
 
 function displayDate(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -56,18 +95,19 @@ function ValueRow({
   name: string;
   value: string;
   confidence: number | undefined;
-  provenance: Record<string, string | number | null> | undefined;
+  provenance: Record<string, unknown> | undefined;
 }) {
+  // Key names as the pipeline writes them. They were read here under different names -
+  // "text" and "page" - which no stage has ever produced, so the line below silently
+  // stayed empty on every value.
   const method = typeof provenance?.method === "string" ? provenance.method : null;
-  const snippet = typeof provenance?.text === "string" ? provenance.text : null;
-  const page = typeof provenance?.page === "number" ? provenance.page : null;
+  const snippet = typeof provenance?.snippet === "string" ? provenance.snippet : null;
+  const page = typeof provenance?.page_number === "number" ? provenance.page_number : null;
   const score = confidenceLabel(confidence);
 
   return (
     <div className="border-b border-border py-3 last:border-0">
-      <dt className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        {name.replace(/_/g, " ")}
-      </dt>
+      <dt className="text-base font-semibold text-muted-foreground">{name}</dt>
       <dd className="mt-1 space-y-1">
         <p className="text-lg text-foreground" {...valueTextAttributes(value)}>
           {value}
@@ -184,6 +224,16 @@ export default function CertificateDetailPage() {
   const params = useParams<{ id: string }>();
   const { data: certificate, isPending, error } = useCertificate(params.id);
   const { data: candidates } = useDuplicateCandidates(params.id);
+  const { data: schema } = useSchemaVersion(certificate?.schema_version_id);
+
+  const labels = React.useMemo(
+    () => new Map((schema?.fields ?? []).map((definition) => [definition.name, definition.label])),
+    [schema],
+  );
+  const order = React.useMemo(
+    () => new Map((schema?.fields ?? []).map((definition, index) => [definition.name, index])),
+    [schema],
+  );
 
   if (error) {
     return (
@@ -213,7 +263,7 @@ export default function CertificateDetailPage() {
     );
   }
 
-  const fieldNames = Object.keys(certificate.values);
+  const fieldNames = inSchemaOrder(Object.keys(certificate.values), order);
 
   return (
     <AppShell>
@@ -281,7 +331,7 @@ export default function CertificateDetailPage() {
                 {fieldNames.map((name) => (
                   <ValueRow
                     key={name}
-                    name={name}
+                    name={labelFor(name, labels)}
                     value={certificate.values[name] ?? ""}
                     confidence={certificate.confidences[name]}
                     provenance={certificate.provenance[name]}

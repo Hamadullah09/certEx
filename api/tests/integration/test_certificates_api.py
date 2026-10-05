@@ -349,6 +349,37 @@ class TestReading:
         )
         assert count == 1
 
+    async def test_provenance_survives_the_round_trip_with_its_bounding_box(
+        self, api_client: AsyncClient, operator_user: User, db_session: AsyncSession
+    ) -> None:
+        """A box is nested JSON, and the response must carry it out unflattened.
+
+        Everything the pipeline files records where on the page it read each value.
+        Nothing recorded by hand does, so a suite that only ever posts entries never
+        sees the shape the pipeline actually writes - and the response model once
+        declared scalars, which made the API advertise a shape it never sent.
+        """
+        await authenticate(api_client, operator_user)
+        entry = await record(api_client, type_id=await birth_type_id(api_client))
+
+        read_from_a_scan = {
+            "sex": {
+                "method": "rule",
+                "label": "sex",
+                "snippet": "Female",
+                "page_number": 1,
+                "bbox": {"x0": 0.45238, "x1": 0.50839, "y0": 0.31045, "y1": 0.32232},
+            }
+        }
+        certificate = await db_session.get(Certificate, uuid.UUID(entry["id"]))
+        assert certificate is not None
+        certificate.provenance_jsonb = read_from_a_scan
+        await db_session.flush()
+
+        response = await api_client.get(f"{CERTIFICATES}/{entry['id']}")
+        assert response.status_code == 200, response.text
+        assert response.json()["provenance"] == read_from_a_scan
+
     async def test_an_unknown_id_is_not_found(
         self, api_client: AsyncClient, viewer_user: User
     ) -> None:

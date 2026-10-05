@@ -1,11 +1,16 @@
 import { z } from "zod";
 
 export const userRoleSchema = z.enum(["ADMIN", "OPERATOR", "VIEWER"]);
+
+/** Most powerful first, which is the order the role pickers offer them in. */
+export const USER_ROLES = userRoleSchema.options;
 export type UserRole = z.infer<typeof userRoleSchema>;
 
 export const userProfileSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
+  /** Null on an account made before names existed, or by a seeding script. */
+  full_name: z.string().nullish(),
   role: userRoleSchema,
   workspace_id: z.string().uuid(),
   is_active: z.boolean(),

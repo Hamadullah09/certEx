@@ -36,6 +36,7 @@ class UserProfile(BaseModel):
 
     id: uuid.UUID
     email: EmailStr
+    full_name: str | None = None
     role: UserRole
     workspace_id: uuid.UUID
     is_active: bool

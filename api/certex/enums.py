@@ -481,6 +481,11 @@ class AuditAction(StrEnum):
     USER_CREATED = "user.created"
     USER_UPDATED = "user.updated"
     USER_DELETED = "user.deleted"
+    USER_PASSWORD_RESET = "user.password_reset"
+    """An administrator set somebody else's password."""
+
+    USER_PASSWORD_CHANGED = "user.password_changed"
+    """Somebody changed their own."""
 
     RETENTION_PURGED = "retention.purged"
 

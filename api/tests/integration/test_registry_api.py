@@ -107,12 +107,14 @@ async def other_workspace_admin(session: AsyncSession) -> User:
 
 
 class TestNavigation:
-    async def test_a_new_workspace_opens_onto_the_three_standard_types(
+    async def test_a_new_workspace_opens_onto_the_four_standard_categories(
         self, api_client: AsyncClient, admin_user: User
     ) -> None:
+        """In this order: it is the order of the navigation, and "Other" is last
+        because it is where a document goes when none of the three fit."""
         await authenticate(api_client, admin_user)
         types = await seed_types(api_client)
-        assert [item["key"] for item in types] == ["BIRTH", "MARRIAGE", "DEATH"]
+        assert [item["key"] for item in types] == ["BIRTH", "MARRIAGE", "DEATH", "OTHER"]
 
     async def test_types_carry_their_classifier_key(
         self, api_client: AsyncClient, admin_user: User
@@ -124,6 +126,7 @@ class TestNavigation:
             CertificateType.BIRTH.value,
             CertificateType.MARRIAGE.value,
             CertificateType.DEATH.value,
+            CertificateType.OTHER.value,
         }
 
     async def test_seeding_happens_once(self, api_client: AsyncClient, admin_user: User) -> None:
@@ -136,7 +139,7 @@ class TestNavigation:
         self, api_client: AsyncClient, viewer_user: User
     ) -> None:
         await authenticate(api_client, viewer_user)
-        assert len(await seed_types(api_client)) == 3
+        assert len(await seed_types(api_client)) == 4
 
     async def test_signing_in_is_required(self, api_client: AsyncClient) -> None:
         assert (await api_client.get(TYPES)).status_code == 401

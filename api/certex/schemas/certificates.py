@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -193,7 +194,11 @@ class CertificateDetail(CertificateSummary):
     )
     values: dict[str, str] = Field(default_factory=dict)
     confidences: dict[str, float] = Field(default_factory=dict)
-    provenance: dict[str, dict[str, str | int | float | None]] = Field(default_factory=dict)
+    # Deliberately open at the leaf. The pipeline writes a bounding box under each
+    # field, so the values here are nested JSON, not scalars; the narrower annotation
+    # that used to stand here made the API advertise a shape it has never sent, and a
+    # client that believed the schema rejected every entry read from a scan.
+    provenance: dict[str, dict[str, Any]] = Field(default_factory=dict)
     names: list[NamedValue] = Field(default_factory=list)
     dates: list[TypedDate] = Field(default_factory=list)
     documents: list[DocumentLink] = Field(default_factory=list)

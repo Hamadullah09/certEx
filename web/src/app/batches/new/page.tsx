@@ -32,6 +32,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { type UploadItem, useBatchUpload, useCreateBatch } from "@/hooks/use-batches";
+import { useWorkspaceSettings } from "@/hooks/use-review";
 import { ApiError } from "@/lib/api";
 import {
   ACCEPTED_EXTENSIONS,
@@ -116,15 +117,34 @@ function PasswordRetry({
   );
 }
 
+/**
+ * Used only for the instant before the office's settings arrive, and matched to the
+ * server's own defaults so the form never shows a policy nobody chose.
+ */
+const DEFAULT_AUTO_APPROVE = 0.9;
+const DEFAULT_REVIEW_FLOOR = 0.6;
+
 export default function NewBatchPage() {
   const router = useRouter();
   const createBatch = useCreateBatch();
+  const { data: workspaceSettings } = useWorkspaceSettings();
 
   const [name, setName] = React.useState("");
   const [expectedTypes, setExpectedTypes] = React.useState<CertificateType[]>([]);
   const [languages, setLanguages] = React.useState<string[]>(["eng", "urd"]);
-  const [autoApprove, setAutoApprove] = React.useState(0.9);
-  const [reviewFloor, setReviewFloor] = React.useState(0.6);
+  // Seeded from the office's own settings rather than from a number chosen here.
+  // These two decide what gets filed without anybody looking at it, and an office that
+  // has set "check everything" means it - a form that quietly proposed 90% instead
+  // would hand that decision back to whoever happens to be uploading.
+  const [autoApprove, setAutoApprove] = React.useState(DEFAULT_AUTO_APPROVE);
+  const [reviewFloor, setReviewFloor] = React.useState(DEFAULT_REVIEW_FLOOR);
+  const seeded = React.useRef(false);
+  React.useEffect(() => {
+    if (!workspaceSettings || seeded.current) return;
+    seeded.current = true;
+    setAutoApprove(workspaceSettings.review.confidence_auto_approve);
+    setReviewFloor(workspaceSettings.review.confidence_review_floor);
+  }, [workspaceSettings]);
   const [rejections, setRejections] = React.useState<FileRejection[]>([]);
   const [batchId, setBatchId] = React.useState<string | null>(null);
 

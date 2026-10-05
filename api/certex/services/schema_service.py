@@ -49,7 +49,9 @@ from certex.logging_setup import get_logger
 __all__ = [
     "SchemaDraftField",
     "create_schema",
+    "create_schema_for_batch",
     "create_version",
+    "default_version_for_type",
     "default_version_for_type_sync",
     "ensure_builtin_types",
     "ensure_builtin_types_sync",
@@ -266,6 +268,17 @@ BUILTIN_TYPES: tuple[tuple[CertificateType, str, str, int], ...] = (
     (CertificateType.BIRTH, "Birth", "Birth certificates and registrations.", 1),
     (CertificateType.MARRIAGE, "Marriage", "Marriage certificates and nikah nama.", 2),
     (CertificateType.DEATH, "Death", "Death certificates and registrations.", 3),
+    # Last, and deliberately present. A records office holds documents that are none of
+    # the three - domicile, succession, a form nobody has a name for - and without a
+    # category to put them in they end up filed as births, which is worse than filing
+    # them as "other". Its built-in schema is the common fields only, so a batch here
+    # almost always defines its own columns.
+    (
+        CertificateType.OTHER,
+        "Other",
+        "Certificates that are not births, marriages or deaths.",
+        4,
+    ),
 )
 
 
@@ -405,6 +418,127 @@ async def create_schema(
     return schema
 
 
+async def create_schema_for_batch(
+    session: AsyncSession,
+    *,
+    scope: WorkspaceScope,
+    certificate_type_id: uuid.UUID,
+    batch_name: str,
+    fields: list[SchemaDraftField],
+) -> SchemaVersion:
+    """A schema belonging to one batch, built from the columns its creator defined.
+
+    Separate from :func:`create_schema` because the two answer different questions.
+    A workspace schema is a standard an administrator sets for a whole certificate
+    type; this is one batch's own answer to "what is on these particular forms", and
+    the person who needs it is the clerk creating the batch. Requiring an
+    administrator for that would mean nobody could start work on a new register
+    without one, so this needs OPERATOR - the same right that creates the batch it
+    belongs to, and it cannot alter a schema any other batch reads.
+
+    Published immediately. A draft schema would leave the batch pinned to columns that
+    no extraction is allowed to use, and the clerk has already decided.
+    """
+    scope.require(UserRole.OPERATOR)
+    validate_draft_fields(fields)
+
+    certificate_type = await session.scalar(
+        select(CertificateTypeRecord).where(
+            CertificateTypeRecord.id == certificate_type_id,
+            CertificateTypeRecord.workspace_id == scope.workspace_id,
+        )
+    )
+    if certificate_type is None:
+        raise NotFoundError("That certificate type does not exist in this workspace.")
+
+    schema = CertificateSchema(
+        workspace_id=scope.workspace_id,
+        certificate_type_id=certificate_type_id,
+        name=await _unused_schema_name(session, certificate_type_id, batch_name),
+        description="The columns defined when this batch was created.",
+        created_by=scope.user_id,
+    )
+    session.add(schema)
+    await session.flush()
+
+    version = SchemaVersion(
+        schema_id=schema.id,
+        workspace_id=scope.workspace_id,
+        version=1,
+        status=SchemaVersionStatus.PUBLISHED,
+        published_at=dt.datetime.now(dt.UTC),
+        notes=f"Columns defined for the batch {batch_name!r}.",
+        created_by=scope.user_id,
+    )
+    session.add(version)
+    await session.flush()
+    _add_fields(session, version_id=version.id, fields=fields)
+    await session.flush()
+
+    logger.info(
+        "schema.created_for_batch",
+        entity_id=str(version.id),
+        workspace_id=str(scope.workspace_id),
+        count=len(fields),
+    )
+    return version
+
+
+async def _unused_schema_name(
+    session: AsyncSession, certificate_type_id: uuid.UUID, batch_name: str
+) -> str:
+    """A schema name free within this certificate type.
+
+    Schema names are unique per type, and two batches may legitimately be called the
+    same thing - "2020 register" exists in most offices more than once. The batch name
+    is still used, because a list of schemas named after hashes helps nobody.
+    """
+    base = batch_name[:140]
+    taken = set(
+        (
+            await session.scalars(
+                select(CertificateSchema.name).where(
+                    CertificateSchema.certificate_type_id == certificate_type_id
+                )
+            )
+        ).all()
+    )
+    if base not in taken:
+        return base
+    for suffix in range(2, 1000):
+        candidate = f"{base} ({suffix})"
+        if candidate not in taken:
+            return candidate
+    return f"{base} ({uuid.uuid4().hex[:8]})"
+
+
+def _add_fields(
+    session: AsyncSession, *, version_id: uuid.UUID, fields: list[SchemaDraftField]
+) -> None:
+    """Write the field rows for one version, in the order they were given.
+
+    The order is the order: it is the column order of the CSV and of every screen that
+    shows the batch, and the person who dragged the columns into it meant it.
+    """
+    for position, field in enumerate(fields):
+        session.add(
+            SchemaField(
+                schema_version_id=version_id,
+                position=position,
+                name=field.name,
+                label=field.label,
+                kind=field.kind.value,
+                role=field.role,
+                required=field.required,
+                searchable=field.searchable,
+                is_unique=field.unique,
+                description=field.description,
+                labels_en=list(field.labels_en),
+                labels_ur=list(field.labels_ur),
+            )
+        )
+
+
 async def create_version(
     session: AsyncSession,
     *,
@@ -448,23 +582,7 @@ async def create_version(
     session.add(version)
     await session.flush()
 
-    for position, field in enumerate(fields):
-        session.add(
-            SchemaField(
-                schema_version_id=version.id,
-                position=position,
-                name=field.name,
-                label=field.label,
-                kind=field.kind.value,
-                role=field.role,
-                required=field.required,
-                searchable=field.searchable,
-                is_unique=field.unique,
-                description=field.description,
-                labels_en=list(field.labels_en),
-                labels_ur=list(field.labels_ur),
-            )
-        )
+    _add_fields(session, version_id=version.id, fields=fields)
     await session.flush()
 
     logger.info(
@@ -518,7 +636,12 @@ async def list_types(
 async def default_version_for_type(
     session: AsyncSession, *, scope: WorkspaceScope, certificate_type_id: uuid.UUID
 ) -> SchemaVersion | None:
-    """The newest published version of a type's default schema."""
+    """The newest published version of a type's default schema.
+
+    What a batch pins when its creator chose a category but defined no columns of its
+    own. Returns nothing when the type has no published schema at all, and the caller
+    falls back to the built-in fields rather than refusing to create the batch.
+    """
     version: SchemaVersion | None = await session.scalar(
         select(SchemaVersion)
         .join(CertificateSchema, CertificateSchema.id == SchemaVersion.schema_id)

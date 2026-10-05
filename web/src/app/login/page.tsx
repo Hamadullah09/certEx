@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AlertCircle, FileStack, Loader2 } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -138,7 +139,7 @@ export default function LoginPage() {
               </div>
             </CardContent>
 
-            <CardFooter>
+            <CardFooter className="flex-col items-stretch gap-4">
               <Button type="submit" size="lg" className="w-full" disabled={login.isPending}>
                 {login.isPending ? (
                   <>
@@ -149,6 +150,12 @@ export default function LoginPage() {
                   "Sign in"
                 )}
               </Button>
+              <Link
+                href="/forgot-password"
+                className="text-center text-base font-semibold text-primary underline decoration-2 underline-offset-4"
+              >
+                I have forgotten my password
+              </Link>
             </CardFooter>
           </form>
         </Card>

@@ -98,6 +98,16 @@ def extract_fields(
     """
     active = schema_or_builtin(certificate_type, schema)
     template_layer = apply_template(pages, template_rules) if template_rules else {}
+
+    # A template is recognised by the shape of the *form*, not by the batch, so one
+    # learned while reading a batch that extracts twenty fields will happily offer all
+    # twenty to a batch that asked for four. The batch's columns decide what this row
+    # holds, so anything the schema does not define is dropped here rather than being
+    # written under a column that does not exist.
+    if template_layer:
+        template_layer = {
+            name: candidate for name, candidate in template_layer.items() if name in active.by_name
+        }
     rules_layer = extract_with_rules(pages, certificate_type=certificate_type, schema=active)
     merged = _normalise(merge_candidates(template_layer, rules_layer), active)
 

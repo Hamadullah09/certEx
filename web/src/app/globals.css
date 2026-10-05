@@ -94,6 +94,31 @@
   --confidence-low: oklch(0.945 0.026 22);
   --confidence-low-foreground: oklch(0.4 0.16 27);
 
+  /*
+   * Category accents: one hue per kind of certificate.
+   *
+   * Navigation here is four choices a clerk makes dozens of times a day, and four
+   * identically-coloured links mean reading every one of them every time. Giving each
+   * its own hue and its own icon makes the target recognisable before it is read -
+   * which matters most for the people this app is built for, who may be reading in
+   * their second script.
+   *
+   * Colour is never the only signal: every category also carries its name and a
+   * distinct icon, so nothing here fails for a colour-blind reader.
+   *
+   * Hues are spaced far enough apart to stay distinguishable under the commonest
+   * colour-vision deficiencies: indigo, teal, amber and slate rather than the
+   * red/green pair that would collapse.
+   */
+  --category-birth: oklch(0.47 0.185 267);
+  --category-birth-surface: oklch(0.945 0.021 267);
+  --category-marriage: oklch(0.48 0.12 196);
+  --category-marriage-surface: oklch(0.945 0.03 196);
+  --category-death: oklch(0.45 0.06 262);
+  --category-death-surface: oklch(0.94 0.014 262);
+  --category-other: oklch(0.47 0.1 85);
+  --category-other-surface: oklch(0.95 0.045 85);
+
   --radius: 0.75rem;
 }
 
@@ -154,6 +179,17 @@
   --confidence-medium-foreground: oklch(0.9 0.105 84);
   --confidence-low: oklch(0.32 0.08 22);
   --confidence-low-foreground: oklch(0.88 0.055 22);
+
+  /* Lifted and desaturated for dark: the same hues, at a lightness that keeps the
+     white ink on a selected category above 7:1. */
+  --category-birth: oklch(0.63 0.16 267);
+  --category-birth-surface: oklch(0.3 0.075 267);
+  --category-marriage: oklch(0.65 0.105 196);
+  --category-marriage-surface: oklch(0.3 0.05 196);
+  --category-death: oklch(0.64 0.05 262);
+  --category-death-surface: oklch(0.3 0.03 262);
+  --category-other: oklch(0.68 0.1 85);
+  --category-other-surface: oklch(0.31 0.06 85);
 }
 
 @theme inline {
@@ -201,6 +237,15 @@
   --color-confidence-medium-foreground: var(--confidence-medium-foreground);
   --color-confidence-low: var(--confidence-low);
   --color-confidence-low-foreground: var(--confidence-low-foreground);
+
+  --color-category-birth: var(--category-birth);
+  --color-category-birth-surface: var(--category-birth-surface);
+  --color-category-marriage: var(--category-marriage);
+  --color-category-marriage-surface: var(--category-marriage-surface);
+  --color-category-death: var(--category-death);
+  --color-category-death-surface: var(--category-death-surface);
+  --color-category-other: var(--category-other);
+  --color-category-other-surface: var(--category-other-surface);
 
   --radius-sm: calc(var(--radius) - 0.375rem);
   --radius-md: calc(var(--radius) - 0.25rem);

@@ -9,6 +9,14 @@ export interface PageHeaderProps extends React.HTMLAttributes<HTMLDivElement> {
   /** One plain sentence saying what this page is for. */
   description: string;
   icon: LucideIcon;
+  /**
+   * Overrides the icon tile's colours.
+   *
+   * Used by the category screens, which each wear their own hue so a clerk can tell
+   * which register they are in from the shape of the page rather than by reading the
+   * heading. Left unset everywhere else, which keeps the primary tile.
+   */
+  iconClassName?: string;
   /** Primary action for the page, shown at the end of the row. */
   actions?: React.ReactNode;
 }
@@ -22,7 +30,7 @@ export interface PageHeaderProps extends React.HTMLAttributes<HTMLDivElement> {
  * template and settings pages will each want the same band.
  */
 const PageHeader = React.forwardRef<HTMLDivElement, PageHeaderProps>(
-  ({ className, title, description, icon: Icon, actions, ...props }, ref) => (
+  ({ className, title, description, icon: Icon, iconClassName, actions, ...props }, ref) => (
     <div
       ref={ref}
       className={cn("flex flex-wrap items-start justify-between gap-5", className)}
@@ -31,7 +39,10 @@ const PageHeader = React.forwardRef<HTMLDivElement, PageHeaderProps>(
       <div className="flex min-w-0 items-start gap-4">
         <span
           aria-hidden="true"
-          className="hidden size-14 shrink-0 items-center justify-center rounded-xl border border-primary-border/50 bg-primary-surface text-primary-surface-foreground sm:flex"
+          className={cn(
+            "hidden size-14 shrink-0 items-center justify-center rounded-xl border border-primary-border/50 bg-primary-surface text-primary-surface-foreground sm:flex",
+            iconClassName,
+          )}
         >
           <Icon className="size-7" />
         </span>

@@ -12,7 +12,9 @@ import {
 } from "@/lib/schemas/certificates";
 import {
   type CertificateTypeSummary,
+  type SchemaVersionDetail,
   certificateTypeListSchema,
+  schemaVersionDetailSchema,
 } from "@/lib/schemas/registry";
 
 /**
@@ -28,12 +30,18 @@ export const registerKeys = {
   types: ["register", "types"] as const,
   search: (params: SearchParams) => ["register", "search", params] as const,
   certificate: (id: string) => ["register", "certificate", id] as const,
+  schemaVersion: (id: string) => ["register", "schema-version", id] as const,
   duplicates: (id: string) => ["register", "certificate", id, "duplicates"] as const,
 };
 
 export interface SearchParams {
   q?: string;
   certificateTypeId?: string;
+  /** Only entries read from this batch. */
+  batchId?: string;
+  /** A configured column to search by name - any column a batch defines. */
+  field?: string;
+  fieldValue?: string;
   name?: string;
   fatherName?: string;
   eventDateFrom?: string;
@@ -58,6 +66,11 @@ function searchQueryString(params: SearchParams): string {
   const query = new URLSearchParams();
   if (params.q?.trim()) query.set("q", params.q.trim());
   if (params.certificateTypeId) query.set("certificate_type_id", params.certificateTypeId);
+  if (params.batchId) query.set("batch_id", params.batchId);
+  if (params.field && params.fieldValue?.trim()) {
+    query.set("field", params.field);
+    query.set("field_value", params.fieldValue.trim());
+  }
   if (params.name?.trim()) query.set("name", params.name.trim());
   if (params.fatherName?.trim()) query.set("father_name", params.fatherName.trim());
   if (params.eventDateFrom) query.set("event_date_from", params.eventDateFrom);
@@ -73,6 +86,8 @@ function searchQueryString(params: SearchParams): string {
 export function hasSearchTerms(params: SearchParams): boolean {
   return Boolean(
     params.q?.trim() ||
+      (params.field && params.fieldValue?.trim()) ||
+      params.batchId ||
       params.name?.trim() ||
       params.fatherName?.trim() ||
       params.eventDateFrom ||
@@ -100,6 +115,26 @@ export function useCertificate(id: string) {
     queryKey: registerKeys.certificate(id),
     queryFn: () => apiFetch(`/api/v1/certificates/${id}`, certificateDetailSchema),
     enabled: Boolean(id),
+  });
+}
+
+/**
+ * The field definitions an entry was read under.
+ *
+ * Needed because a field's machine name is not its name. "father_id_number" is what
+ * the column is called; "Father's CNIC" is what it is called on the certificate, and
+ * an office that invents its own type names its own fields - so the labels have to
+ * come from the schema the entry was filed against, not from a table compiled into
+ * this build.
+ */
+export function useSchemaVersion(versionId: string | null | undefined) {
+  return useQuery<SchemaVersionDetail>({
+    queryKey: registerKeys.schemaVersion(versionId ?? ""),
+    queryFn: () =>
+      apiFetch(`/api/v1/schema-versions/${versionId}`, schemaVersionDetailSchema),
+    enabled: Boolean(versionId),
+    // A published version never changes; only a new one is ever created.
+    staleTime: Infinity,
   });
 }
 

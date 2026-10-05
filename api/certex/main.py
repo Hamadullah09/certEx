@@ -26,7 +26,9 @@ from certex.api.v1 import imports as import_routes
 from certex.api.v1 import progress as progress_routes
 from certex.api.v1 import registry as registry_routes
 from certex.api.v1 import rows as row_routes
+from certex.api.v1 import templates as template_routes
 from certex.api.v1 import units as unit_routes
+from certex.api.v1 import users as user_routes
 from certex.api.v1 import workspace as workspace_routes
 from certex.config import Settings, get_settings
 from certex.core.errors import (
@@ -242,6 +244,8 @@ def _register_routes(application: FastAPI) -> None:
     application.include_router(unit_routes.router, prefix=API_V1_PREFIX)
     application.include_router(row_routes.router, prefix=API_V1_PREFIX)
     application.include_router(progress_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(template_routes.router, prefix=API_V1_PREFIX)
+    application.include_router(user_routes.router, prefix=API_V1_PREFIX)
     application.include_router(export_routes.router, prefix=API_V1_PREFIX)
 
 

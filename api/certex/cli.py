@@ -51,9 +51,22 @@ def _seed(settings: Settings) -> int:
     )
 
     with session_scope() as session:
-        workspace = session.scalar(
-            select(Workspace).where(Workspace.name == settings.seed_workspace_name)
+        # Found through the seed administrator, not through the workspace name. The
+        # name is editable from Settings, and an office that renames itself would
+        # otherwise get a brand new empty workspace on every restart - the account is
+        # the stable identity, the name is a label.
+        seed_admin = session.scalar(
+            select(User).where(User.email == settings.seed_admin_email)
         )
+        workspace = (
+            session.get(Workspace, seed_admin.workspace_id) if seed_admin is not None else None
+        )
+        if workspace is None:
+            # No seed administrator yet. A workspace under the seed name may still
+            # exist from a half-finished run, so adopt that before making another.
+            workspace = session.scalar(
+                select(Workspace).where(Workspace.name == settings.seed_workspace_name)
+            )
         if workspace is None:
             workspace = Workspace(
                 name=settings.seed_workspace_name,

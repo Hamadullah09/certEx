@@ -38,15 +38,21 @@ import {
   remainingChunks,
 } from "@/lib/upload";
 
+export interface BatchListFilters {
+  status?: BatchStatus;
+  search?: string;
+  /** Only batches in this certificate category. */
+  certificateTypeId?: string;
+}
+
 export const batchKeys = {
   all: ["batches"] as const,
-  list: (filters: { status?: BatchStatus; search?: string }) =>
-    ["batches", "list", filters] as const,
+  list: (filters: BatchListFilters) => ["batches", "list", filters] as const,
   detail: (id: string) => ["batches", "detail", id] as const,
   documents: (id: string) => ["batches", id, "documents"] as const,
 };
 
-export function useBatchList(filters: { status?: BatchStatus; search?: string } = {}) {
+export function useBatchList(filters: BatchListFilters = {}) {
   return useInfiniteQuery({
     queryKey: batchKeys.list(filters),
     initialPageParam: null as string | null,
@@ -55,6 +61,11 @@ export function useBatchList(filters: { status?: BatchStatus; search?: string } 
       if (pageParam) params.set("cursor", pageParam);
       if (filters.status) params.set("filter[status]", filters.status);
       if (filters.search) params.set("search", filters.search);
+      if (filters.certificateTypeId) {
+        params.set("filter[certificate_type_id]", filters.certificateTypeId);
+      }
+      // Paged by cursor, never loaded whole: a category may hold thousands of
+      // batches and this list is the first screen somebody opens.
       return apiFetch(`/api/v1/batches?${params.toString()}`, batchPageSchema);
     },
     getNextPageParam: (lastPage) => lastPage.meta.next_cursor ?? null,
@@ -81,9 +92,37 @@ export function useBatchDocuments(id: string, options: { poll?: boolean } = {}) 
   });
 }
 
+/**
+ * What a batch is created with.
+ *
+ * `fields` is the important part: the columns every document uploaded into this batch
+ * will be read for, pinned at creation and never asked for again. Leaving it out pins
+ * the category's standard columns instead, which is what an office that has not
+ * customised anything wants.
+ */
+export interface CreateBatchRequest {
+  name: string;
+  settings?: BatchSettings;
+  certificate_type_id?: string;
+  schema_version_id?: string;
+  fields?: {
+    name: string;
+    label: string;
+    kind: string;
+    role?: string;
+    required?: boolean;
+    searchable?: boolean;
+    labels_en?: string[];
+    labels_ur?: string[];
+  }[];
+  description?: string;
+  year?: number;
+  registration_office?: string;
+}
+
 export function useCreateBatch() {
   const queryClient = useQueryClient();
-  return useMutation<BatchDetail, Error, { name: string; settings: BatchSettings }>({
+  return useMutation<BatchDetail, Error, CreateBatchRequest>({
     mutationFn: (payload) =>
       apiFetch("/api/v1/batches", batchDetailSchema, { method: "POST", body: payload }),
     onSuccess: () => {
@@ -110,12 +149,49 @@ export function useStartBatch() {
   });
 }
 
+/**
+ * Delete a batch.
+ *
+ * `force` is for a batch that is still being read. The server refuses that by
+ * default - deleting one a minute from finishing throws away real work - but a batch
+ * whose worker died stays "being read" for ever, and without this the batch an office
+ * most wants rid of is the one it can never delete.
+ *
+ * `includeRegister` is for a batch whose certificates reached the register. Those
+ * entries cite its scans, so the server refuses until somebody says the entries should
+ * go too - which is the right answer when the whole batch was a mistake, and the wrong
+ * one every other time.
+ */
 export function useDeleteBatch() {
   const queryClient = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (id) => apiVoid(`/api/v1/batches/${id}`, { method: "DELETE" }),
+  return useMutation<void, Error, { id: string; force?: boolean; includeRegister?: boolean }>({
+    mutationFn: ({ id, force, includeRegister }) => {
+      const query = new URLSearchParams();
+      if (force) query.set("force", "true");
+      if (includeRegister) query.set("include_register", "true");
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      return apiVoid(`/api/v1/batches/${id}${suffix}`, { method: "DELETE" });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: batchKeys.all });
+    },
+  });
+}
+
+/**
+ * Take one file back out of a batch.
+ *
+ * Invalidates the batch as well as its file list, because removing a file changes the
+ * counters the dashboard shows above it.
+ */
+export function useRemoveDocument(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (documentId) =>
+      apiVoid(`/api/v1/batches/${batchId}/documents/${documentId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: batchKeys.documents(batchId) });
+      void queryClient.invalidateQueries({ queryKey: batchKeys.detail(batchId) });
     },
   });
 }

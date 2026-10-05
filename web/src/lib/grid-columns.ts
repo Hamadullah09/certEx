@@ -115,6 +115,31 @@ export function buildGridColumns(types: readonly CertificateType[]): GridColumn[
   return columns;
 }
 
+/**
+ * What to call one field on screen.
+ *
+ * Needed because a row carries two different things that both look like a label. The
+ * field's *name* is what the office calls it everywhere - in the grid heading, in the
+ * export column, on the register entry. The row's `label` is the words printed beside
+ * that value on *this particular scan*, which is provenance: useful for explaining
+ * where a value came from, useless as a heading, because the same field then appears
+ * as "Date of registration" on one certificate and "Reg. date" on the next.
+ *
+ * So: the office's name for the field, and only the printed words if this build has
+ * never heard of the field at all.
+ */
+export function fieldLabel(
+  name: string,
+  types: readonly CertificateType[],
+  printed?: string | null,
+): string {
+  const spec = fieldSpecsFor(types).find((candidate) => candidate.name === name);
+  if (spec) return spec.label;
+  if (printed) return printed;
+  const spaced = name.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 /** Total width of the grid, so the scroller knows how wide its content is. */
 export function totalColumnWidth(columns: readonly GridColumn[]): number {
   return columns.reduce((sum, column) => sum + column.width, 0);

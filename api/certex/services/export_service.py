@@ -37,6 +37,7 @@ from certex.logging_setup import get_logger
 from certex.schemas.common import Cursor
 from certex.services import row_service
 from certex.services.row_service import RowRecord
+from certex.services.schema_service import schema_for_batch
 
 __all__ = [
     "ExportFilters",
@@ -86,6 +87,7 @@ async def plan_export(
     filters: ExportFilters,
     include_confidence: bool = False,
     include_snippet: bool = False,
+    include_extras: bool = False,
 ) -> ExportPlan:
     """Work out the columns and the counts by looking at what the export will cover.
 
@@ -117,13 +119,34 @@ async def plan_export(
             await session.scalars(base.with_only_columns(Extraction.certificate_type).distinct())
         ).all()
     )
-    extras = await extra_field_names(session, batch_id=batch.id)
+    # The batch's own columns decide the export, in the order its creator put them in.
+    # Without this the download falls back to the built-in fields for whichever types
+    # the classifier found, which for a batch that defined its own columns means a CSV
+    # that does not have them - the one thing a configured batch must never produce.
+    # Only a schema the batch actually pinned replaces the type's columns. A batch that
+    # pinned none still resolves to a schema - the common fields - and handing *that*
+    # over as the whole column plan would drop every birth or death field from the
+    # export of a batch that never configured anything.
+    configured = batch.schema_version_id is not None
+    schemas = [await schema_for_batch(session, batch)] if configured else []
+
+    # Extras are everything else the form printed, under labels the schema has no field
+    # for. Worth having when nobody said what to extract; noise when somebody did - a
+    # register configured with four columns does not want fourteen more beside them.
+    # An office that wants them anyway asks for them.
+    extras = (
+        await extra_field_names(session, batch_id=batch.id)
+        if include_extras or not configured
+        else []
+    )
 
     return ExportPlan(
         batch=batch,
         columns=build_column_plan(
             types or [CertificateType.OTHER],
+            schemas=schemas,
             extra_field_names=extras,
+            include_extras=include_extras or not configured,
             include_confidence=include_confidence,
             include_snippet=include_snippet,
         ),

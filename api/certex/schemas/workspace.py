@@ -14,11 +14,18 @@ are right, which is why this is configuration.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-__all__ = ["ReviewSettings", "WorkspaceSettings", "WorkspaceSettingsUpdate"]
+__all__ = [
+    "ReviewSettings",
+    "WorkspaceProfile",
+    "WorkspaceRename",
+    "WorkspaceSettings",
+    "WorkspaceSettingsUpdate",
+]
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0)]
 
@@ -83,3 +90,20 @@ class WorkspaceSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     review: ReviewSettings | None = None
+
+
+class WorkspaceRename(BaseModel):
+    """What this office is called."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+
+
+class WorkspaceProfile(BaseModel):
+    """The office itself, rather than the thresholds it reads by."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str

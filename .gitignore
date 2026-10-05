@@ -36,3 +36,8 @@ Thumbs.db
 # Generated test artifacts
 /api/tests/fixtures/generated/
 /api/.artifacts/
+
+# Real certificates dropped in for testing. These are somebody's records, and the
+# repository is not where they belong - an accidental `git add .` would publish them.
+certificates sample/
+*.local.pdf

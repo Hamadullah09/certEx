@@ -110,7 +110,15 @@ def upgrade() -> None:
     op.add_column('batches', sa.Column('description', sa.Text(), nullable=True))
     op.add_column('batches', sa.Column('year', sa.Integer(), nullable=True))
     op.add_column('batches', sa.Column('registration_office', sa.String(length=200), nullable=True))
-    op.add_column('batches', sa.Column('needs_review_count', sa.Integer(), nullable=False))
+    # Backfilled through a temporary default: an office upgrading an existing
+    # install already has batches, and NOT NULL with nothing to put in them fails.
+    # The default is dropped again so the column still matches the model, which
+    # sets it in Python.
+    op.add_column(
+        'batches',
+        sa.Column('needs_review_count', sa.Integer(), nullable=False, server_default='0'),
+    )
+    op.alter_column('batches', 'needs_review_count', server_default=None)
     op.create_index(op.f('ix_batches_certificate_type_id'), 'batches', ['certificate_type_id'], unique=False)
     op.create_index(op.f('ix_batches_schema_version_id'), 'batches', ['schema_version_id'], unique=False)
     op.create_foreign_key(op.f('fk_batches_certificate_type_id_certificate_types'), 'batches', 'certificate_types', ['certificate_type_id'], ['id'], ondelete='RESTRICT')

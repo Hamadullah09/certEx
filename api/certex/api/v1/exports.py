@@ -30,6 +30,7 @@ from certex.export.writers import (
 from certex.logging_setup import get_logger
 from certex.schemas.exports import ExportPreview
 from certex.services import batch_service, export_service, row_service
+from certex.services.schema_service import schema_for_batch
 
 __all__ = ["router"]
 
@@ -41,6 +42,16 @@ TypeParam = Annotated[CertificateType | None, Query(alias="filter[type]")]
 FlagParam = Annotated[str | None, Query(alias="filter[flag]", max_length=64)]
 SearchParam = Annotated[str | None, Query(max_length=200)]
 DelimiterParam = Annotated[str, Query(description="comma, semicolon, tab or pipe.")]
+ExtrasParam = Annotated[
+    bool,
+    Query(
+        description=(
+            "Also include every other labelled value the forms carried, as (extra) "
+            "columns. Always on for a batch that defined no columns of its own, since "
+            "there is nothing else to export."
+        )
+    ),
+]
 
 _MEDIA_TYPES = {
     ExportFormat.CSV: "text/csv; charset=utf-8",
@@ -69,6 +80,7 @@ async def preview_export(
     search: SearchParam = None,
     include_confidence: Annotated[bool, Query()] = False,
     include_snippet: Annotated[bool, Query()] = False,
+    include_extras: ExtrasParam = False,
 ) -> ExportPreview:
     """The row and column counts, and how many rows nobody has reviewed yet.
 
@@ -89,6 +101,7 @@ async def preview_export(
         filters=filters,
         include_confidence=include_confidence,
         include_snippet=include_snippet,
+        include_extras=include_extras,
     )
     return ExportPreview(
         batch_id=batch.id,
@@ -121,6 +134,7 @@ async def export_batch(
     search: SearchParam = None,
     include_confidence: Annotated[bool, Query()] = False,
     include_snippet: Annotated[bool, Query()] = False,
+    include_extras: ExtrasParam = False,
     delimiter: DelimiterParam = "comma",
     include_bom: Annotated[
         bool, Query(description="Byte-order mark, so Excel on Windows reads Urdu correctly.")
@@ -144,6 +158,7 @@ async def export_batch(
         filters=filters,
         include_confidence=include_confidence,
         include_snippet=include_snippet,
+        include_extras=include_extras,
     )
     separator = DELIMITERS.get(delimiter, ",")
 
@@ -182,6 +197,7 @@ async def export_batch(
             include_bom=include_bom,
             include_confidence=include_confidence,
             include_snippet=include_snippet,
+            include_extras=include_extras,
         )
 
     extension = export_format.value
@@ -229,11 +245,19 @@ async def _per_type_zip(
     include_bom: bool,
     include_confidence: bool,
     include_snippet: bool,
+    include_extras: bool,
 ) -> Response:
     """One file per certificate type, zipped - for offices that file them separately."""
     archive = io.BytesIO()
     batch_id = batch.id
-    extras = await export_service.extra_field_names(session, batch_id=batch_id)
+    # The same column rules as the single-file export: a batch that defined its own
+    # columns gets those in every file of the zip, not the built-in ones.
+    configured = batch.schema_version_id is not None
+    schemas = [await schema_for_batch(session, batch)] if configured else []
+    with_extras = include_extras or not configured
+    extras = (
+        await export_service.extra_field_names(session, batch_id=batch_id) if with_extras else []
+    )
 
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for certificate_type in export_service.types_in(plan):
@@ -245,7 +269,9 @@ async def _per_type_zip(
             )
             columns = build_column_plan(
                 [certificate_type],
+                schemas=schemas,
                 extra_field_names=extras,
+                include_extras=with_extras,
                 include_confidence=include_confidence,
                 include_snippet=include_snippet,
             )

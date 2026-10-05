@@ -22,6 +22,15 @@ class SearchHitOut(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     certificate: CertificateSummary
+    values: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every field of the entry, under the names its batch's columns use. The "
+            "summary beside it carries only the fields the registry lifts by role, "
+            "which a batch with columns of its own does not have - and the results "
+            "table is supposed to show that batch's columns."
+        ),
+    )
     match: MatchKind
     same_name_count: int = Field(
         default=1,

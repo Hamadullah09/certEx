@@ -22,6 +22,7 @@ __all__ = [
     "TASK_EXTRACT_UNIT",
     "TASK_FINALIZE_DOCUMENT",
     "TASK_IMPORT_CSV",
+    "TASK_LEARN_TEMPLATE",
     "TASK_OCR_PAGE",
     "TASK_SPLIT_DOCUMENT",
     "TASK_TEXT_DOCUMENT",
@@ -40,6 +41,9 @@ TASK_CLASSIFY_UNIT: Final = "pipeline.classify.unit"
 TASK_EXTRACT_UNIT: Final = "pipeline.extract.unit"
 TASK_VALIDATE_UNIT: Final = "pipeline.validate.unit"
 TASK_FINALIZE_DOCUMENT: Final = "pipeline.finalize.document"
+# Routed onto the extraction queue by its name. Learning reads the same page
+# layouts extraction does and is just as short, so it needs no queue of its own.
+TASK_LEARN_TEMPLATE: Final = "pipeline.extract.learn_template"
 TASK_IMPORT_CSV: Final = "register.import.csv"
 
 TaskArgument = str | int

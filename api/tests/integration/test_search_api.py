@@ -342,3 +342,85 @@ class TestAccess:
         await authenticate(api_client, operator_user)
         results = await find(api_client, q="Muhammad Ahmed")
         assert {item["same_name_count"] for item in results["items"]} == {2}
+
+
+class TestSearchingAConfiguredField:
+    """Searching a column the office invented.
+
+    The number and name tiers know about certificate numbers and about people. They
+    know nothing about "Village", "Blood group" or whatever else a particular register
+    prints, and those are exactly the columns a clerk is given to search by.
+    """
+
+    async def test_a_field_is_matched_exactly_by_its_configured_name(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        await authenticate(api_client, operator_user)
+        type_id = await birth_type_id(api_client)
+        await record(api_client, type_id=type_id, number="BC/2020/1", child="Ali Khan")
+        await record(api_client, type_id=type_id, number="BC/2020/2", child="Sara Ahmed")
+
+        found = await api_client.get(f"{SEARCH}?field=child_full_name&field_value=Sara Ahmed")
+        assert found.status_code == 200, found.text
+        body = found.json()
+        assert body["match"] == MatchKind.FIELD_VALUE.value
+        assert [hit["certificate"]["certificate_number"] for hit in body["items"]] == ["BC/2020/2"]
+
+    async def test_a_field_search_does_not_fall_through_to_the_other_tiers(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        """Asked for a village called "42", answering with certificate 42 is worse
+        than answering with nothing: the clerk would act on the wrong record."""
+        await authenticate(api_client, operator_user)
+        type_id = await birth_type_id(api_client)
+        await record(api_client, type_id=type_id, number="42", child="Ali Khan")
+
+        found = await api_client.get(f"{SEARCH}?field=permanent_address&field_value=42")
+        assert found.json()["match"] == MatchKind.NONE.value
+        assert found.json()["items"] == []
+
+    async def test_a_prefix_is_offered_inside_a_category(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        """Only inside a scope. Unscoped it would scan every record the office holds."""
+        await authenticate(api_client, operator_user)
+        type_id = await birth_type_id(api_client)
+        await record(api_client, type_id=type_id, number="BC/2020/9", child="Abdul Rehman")
+
+        scoped = await api_client.get(
+            f"{SEARCH}?field=child_full_name&field_value=Abdul&certificate_type_id={type_id}"
+        )
+        assert scoped.json()["match"] == MatchKind.FIELD_PREFIX.value
+        assert len(scoped.json()["items"]) == 1
+
+    async def test_a_prefix_is_not_offered_without_a_scope(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        await authenticate(api_client, operator_user)
+        type_id = await birth_type_id(api_client)
+        await record(api_client, type_id=type_id, number="BC/2020/9", child="Abdul Rehman")
+
+        unscoped = await api_client.get(f"{SEARCH}?field=child_full_name&field_value=Abdul")
+        assert unscoped.json()["match"] == MatchKind.NONE.value
+
+    async def test_an_unknown_field_name_finds_nothing_rather_than_failing(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        """A column one batch defines and another does not is not an error."""
+        await authenticate(api_client, operator_user)
+        await record(api_client, type_id=await birth_type_id(api_client), number="BC/2020/1")
+
+        found = await api_client.get(f"{SEARCH}?field=blood_group&field_value=O+")
+        assert found.status_code == 200
+        assert found.json()["items"] == []
+
+    async def test_a_value_without_a_field_is_ignored_rather_than_guessed_at(
+        self, api_client: AsyncClient, operator_user: User
+    ) -> None:
+        await authenticate(api_client, operator_user)
+        type_id = await birth_type_id(api_client)
+        await record(api_client, type_id=type_id, number="BC/2020/1", child="Ali Khan")
+
+        found = await api_client.get(f"{SEARCH}?field_value=Ali Khan")
+        # Falls back to the ordinary filtered browse, not to a field match.
+        assert found.json()["match"] == MatchKind.FILTERED.value

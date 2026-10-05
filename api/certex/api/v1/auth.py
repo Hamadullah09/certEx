@@ -25,6 +25,8 @@ from certex.db.models import Workspace
 from certex.enums import AuditAction
 from certex.logging_setup import get_logger
 from certex.schemas.auth import LoginRequest, SessionResponse, UserProfile, WorkspaceSummary
+from certex.schemas.users import PasswordResetRequest
+from certex.services import user_service
 from certex.services.auth_service import (
     IssuedSession,
     authenticate,
@@ -119,6 +121,44 @@ async def login(
     )
     logger.info("auth.login", user_id=str(user.id), workspace_id=str(user.workspace_id))
     return _to_response(issued)
+
+
+@router.post(
+    "/forgot-password",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=None,
+    summary="Say that you have forgotten your password",
+    responses={
+        202: {"description": "Recorded, whether or not that address has an account."},
+        429: {"description": "Too many requests from this address."},
+    },
+)
+async def forgot_password(
+    payload: PasswordResetRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    audit: AnonymousAuditContextDep,
+) -> None:
+    """Record the request. An administrator sees it in the user list and sets a new one.
+
+    There is no mail server in a records office, so no link can be sent - and that is
+    not really a loss, because the administrator is down the corridor and setting a
+    password for somebody you can see is better evidence of who they are than an email
+    link is.
+
+    Always answers 202, whatever address is given. Answering differently for an address
+    that exists would turn this into a list of who works here, readable by anybody.
+    Throttled per address for the same reason login is.
+    """
+    decision = await get_rate_limiter().check(
+        "forgot-password",
+        audit.ip_address or "unknown",
+        limit=settings.rate_limit_login_per_minute,
+    )
+    decision.raise_if_denied(what="password reset requests")
+
+    await user_service.record_reset_request(session, email=payload.email)
+    await session.commit()
 
 
 @router.post(

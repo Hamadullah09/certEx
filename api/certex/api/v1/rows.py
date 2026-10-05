@@ -11,7 +11,7 @@ from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, SettingsDep, WorkspaceScopeDep
 from certex.enums import AuditAction, CertificateType, ReviewStatus
 from certex.logging_setup import get_logger
-from certex.pipeline.dispatch import TASK_EXTRACT_UNIT, enqueue
+from certex.pipeline.dispatch import TASK_EXTRACT_UNIT, TASK_LEARN_TEMPLATE, enqueue
 from certex.schemas.common import Cursor, Page
 from certex.schemas.rows import RowCorrection, RowDetail, RowSummary
 from certex.services import batch_service, row_service
@@ -141,8 +141,16 @@ async def correct_row(
             entity_type="extraction",
             entity_id=row_id,
         )
+    unit_id = record.unit.id
     await session.commit()
     await session.refresh(record.extraction)
+
+    # After the commit, never inside it. Learning reads the row it is learning from, so
+    # a task that started while the correction was still uncommitted would read the old
+    # values - and it is best-effort anyway: the certificate in front of the reviewer is
+    # already correct whether or not the form is ever learned.
+    if payload.fields:
+        enqueue(TASK_LEARN_TEMPLATE, {"unit_id": str(unit_id)})
     return row_service.to_detail(record)
 
 

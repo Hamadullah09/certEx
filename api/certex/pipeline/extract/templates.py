@@ -39,6 +39,8 @@ __all__ = [
     "anchor_lines",
     "apply_template",
     "fingerprint_pages",
+    "label_part",
+    "line_text",
 ]
 
 FINGERPRINT_VERSION: Final = 1
@@ -54,7 +56,7 @@ _TEMPLATE_CONFIDENCE: Final = 0.95
 """A template encodes a person's correction on this form, and is trusted accordingly."""
 
 
-def _label_part(text: str) -> str:
+def label_part(text: str) -> str:
     """The printed furniture of a line: its label, without the value beside it."""
     head = re.split(r"[:]", text, maxsplit=1)[0]
     return normalize_text(head).strip()
@@ -68,7 +70,7 @@ def anchor_lines(layout: PageLayout) -> list[str]:
     """
     anchors: list[str] = []
     for line in layout.lines:
-        candidate = _label_part(line.text)
+        candidate = label_part(line.text)
         if not _MIN_ANCHOR_LENGTH <= len(candidate) <= _MAX_ANCHOR_LENGTH:
             continue
         if _DIGITS.search(candidate):
@@ -115,6 +117,17 @@ def _value_from_line(
     )
     boxes = [word.bbox for word in words[first_word:]]
     return tail, BBox.enclosing(boxes)
+
+
+def line_text(layout: PageLayout, line_index: int) -> str:
+    """One line, joined the way a rule reads it.
+
+    Learning and reading have to agree about where a word ends and the next begins, or
+    a rule learned from a correction looks for an anchor that reading never produces.
+    Both go through this.
+    """
+    text, _spans = _line_text_with_spans(layout, line_index)
+    return text
 
 
 def _apply_rule(page: UnitPage, rule: TemplateRule) -> Candidate | None:

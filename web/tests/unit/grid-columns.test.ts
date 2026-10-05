@@ -7,6 +7,7 @@ import {
   buildGridColumns,
   columnOffset,
   distinctCertificateTypes,
+  fieldLabel,
   fieldSpecsFor,
   keepColumnInView,
   totalColumnWidth,
@@ -119,5 +120,26 @@ describe("keepColumnInView", () => {
 
   it("never scrolls to a negative position for a column inside the frozen strip", () => {
     expect(keepColumnInView({ offset: 0, width: 100, ...viewport })).toBe(0);
+  });
+});
+
+describe("fieldLabel", () => {
+  it("uses the office's name for the field, not the words printed on the scan", () => {
+    // The row carries "date of registration" because that is what this certificate
+    // happens to print. The next one prints "Reg. date", and a heading that followed
+    // the paper would change between two rows of the same column.
+    expect(fieldLabel("registration_date", ["BIRTH"], "date of registration")).toBe(
+      "Registration date",
+    );
+    expect(fieldLabel("father_full_name", ["BIRTH"], "father's name")).toBe("Father's name");
+  });
+
+  it("falls back to the printed words for a field this build does not know", () => {
+    expect(fieldLabel("blood_group", ["BIRTH"], "blood group")).toBe("blood group");
+  });
+
+  it("tidies the machine name when there is nothing else to go on", () => {
+    expect(fieldLabel("blood_group", ["BIRTH"])).toBe("Blood group");
+    expect(fieldLabel("blood_group", ["BIRTH"], null)).toBe("Blood group");
   });
 });

@@ -54,9 +54,10 @@ function TemplateCard({ template }: { template: TemplateSummary }) {
 /**
  * Learned form layouts.
  *
- * There is no `GET /templates` on the API yet, so this screen says so rather than
- * showing invented rows: a records office deciding whether the app has learned
- * their form has to be able to trust what this page tells them.
+ * Nothing on this screen is configured; everything on it was earned by somebody
+ * correcting a form. So the empty state is a normal state, and it says what to do to
+ * leave it rather than apologising - a records office deciding whether the app has
+ * learned their form has to be able to trust what this page tells them.
  */
 export default function TemplatesPage() {
   const templates = useTemplates();
@@ -100,22 +101,22 @@ export default function TemplatesPage() {
       ) : templates.data.status === "unavailable" ? (
         <Card className="mt-8">
           <CardHeader>
-            <CardTitle>No templates have been learned yet</CardTitle>
+            <CardTitle>This list cannot be loaded from the server</CardTitle>
             <CardDescription>
-              Nothing has been learned from corrections so far, and this workspace cannot be asked
-              for a list of templates yet - the server has no route for it in this release. When it
-              does, learned forms appear here with the certificate type they belong to and how many
-              certificates each one has been used on.
+              The part of the server that keeps the learned forms is older than this screen, so it
+              cannot be asked for the list. Nothing has been lost - whatever has been learned is
+              still being used to read certificates. Ask whoever installed the app to update it.
             </CardDescription>
           </CardHeader>
         </Card>
       ) : templates.data.items.length === 0 ? (
         <Card className="mt-8">
           <CardHeader>
-            <CardTitle>No templates have been learned yet</CardTitle>
+            <CardTitle>No forms have been learned yet</CardTitle>
             <CardDescription>
-              Correct the same form a few times on the results screen and the app starts remembering
-              where its fields are. Nothing needs to be set up here.
+              There is nothing to set up here. Go to a batch, open its results, and fix a value the
+              app got wrong - it then remembers where that value is printed on that form, and reads
+              the next copy of the same form correctly on its own.
             </CardDescription>
           </CardHeader>
         </Card>

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
 
 from certex.core.deps import WorkspaceScope
-from certex.core.errors import NotFoundError
+from certex.core.errors import BadRequestError, NotFoundError
 from certex.db.models import Workspace
 from certex.enums import UserRole
 from certex.logging_setup import get_logger
@@ -26,6 +26,7 @@ from certex.schemas.workspace import ReviewSettings, WorkspaceSettings, Workspac
 __all__ = [
     "SETTINGS_KEY",
     "read_settings",
+    "rename_workspace",
     "review_settings_sync",
     "update_settings",
 ]
@@ -101,3 +102,30 @@ def review_settings_sync(session: SyncSession, workspace_id: uuid.UUID) -> Revie
     if not isinstance(stored, dict):
         return ReviewSettings()
     return _parse(stored.get(SETTINGS_KEY)).review
+
+
+async def rename_workspace(session: AsyncSession, *, scope: WorkspaceScope, name: str) -> Workspace:
+    """Change what this office is called.
+
+    It appears on every screen and in the name of every file exported, and the one a
+    deployment starts with is whatever the seeding script was given - "Demo Records
+    Office" unless somebody set CERTEX_SEED_WORKSPACE_NAME. An office that cannot
+    change it is stuck introducing itself as a demo.
+    """
+    scope.require(UserRole.ADMIN)
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        raise BadRequestError(
+            "Give this office a name.",
+            title="Name is empty",
+            remediation="Type the name of the office or department.",
+        )
+
+    workspace = await session.get(Workspace, scope.workspace_id)
+    if workspace is None:  # pragma: no cover - the scope proves it exists
+        raise NotFoundError("This workspace no longer exists.")
+
+    workspace.name = cleaned[:200]
+    await session.flush()
+    logger.info("workspace.renamed", workspace_id=str(scope.workspace_id))
+    return workspace

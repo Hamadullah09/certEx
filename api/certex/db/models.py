@@ -140,6 +140,10 @@ class User(Base, TimestampMixin):
         ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
     email: Mapped[str] = mapped_column(String(320), nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    """What this person is called. Optional: an account created before names existed,
+    or by a script, has none, and the screens fall back to the email."""
+
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[UserRole] = mapped_column(
         enum_column(UserRole), nullable=False, default=UserRole.OPERATOR
@@ -148,6 +152,13 @@ class User(Base, TimestampMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
     last_login_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    password_reset_requested_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    """When this person said they had forgotten their password.
+
+    There is no mail server in a records office, so a reset cannot be emailed. Instead
+    the request is recorded here and an administrator sees it in the user list - which
+    is how it would be handled anyway, by walking down the corridor. Cleared when the
+    password is next set."""
 
     workspace: Mapped[Workspace] = relationship(back_populates="users")
     refresh_tokens: Mapped[list[RefreshToken]] = relationship(

@@ -334,6 +334,21 @@ async def search_certificates(
         ),
     ] = None,
     certificate_type_id: Annotated[uuid.UUID | None, Query()] = None,
+    batch_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Only entries read from this batch."),
+    ] = None,
+    field: Annotated[
+        str | None,
+        Query(
+            max_length=64,
+            description=(
+                "A configured field to search by name - any column the batch defines, "
+                "not only the number and the names. Needs `field_value`."
+            ),
+        ),
+    ] = None,
+    field_value: Annotated[str | None, Query(max_length=200)] = None,
     name: Annotated[str | None, Query(max_length=200, description="Anyone named.")] = None,
     father_name: Annotated[str | None, Query(max_length=200)] = None,
     event_date_from: Annotated[dt.date | None, Query()] = None,
@@ -360,6 +375,9 @@ async def search_certificates(
         query=search_service.SearchQuery(
             text=q,
             certificate_type_id=certificate_type_id,
+            batch_id=batch_id,
+            field=field,
+            field_value=field_value,
             name=name,
             father_name=father_name,
             event_date_from=event_date_from,
@@ -374,6 +392,13 @@ async def search_certificates(
         items=[
             SearchHitOut(
                 certificate=CertificateSummary.model_validate(hit.certificate),
+                # Already loaded on the row; no extra query. Bounded by the page size,
+                # which is why this is on the search and not on the register browse.
+                values={
+                    str(name): str(value)
+                    for name, value in (hit.certificate.values_jsonb or {}).items()
+                    if value is not None
+                },
                 match=hit.kind,
                 same_name_count=hit.same_name_count,
             )

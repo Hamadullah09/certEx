@@ -7,6 +7,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, SettingsDep, WorkspaceScopeDep
@@ -42,9 +43,20 @@ LimitParam = Annotated[int, Query(ge=1, le=200, description="Maximum rows to ret
 _MAX_PASSWORD_LENGTH = 256
 
 
-def _to_detail(batch: Batch) -> BatchDetail:
+async def _to_detail(session: AsyncSession, batch: Batch) -> BatchDetail:
+    """One batch, with the columns every document in it is read for.
+
+    The columns are resolved rather than stored on the row, because a batch that
+    pinned no schema still has columns - the built-in ones for its type - and a screen
+    that showed nothing for those batches would be wrong about what is extracted.
+    """
     detail = BatchDetail.model_validate(batch)
-    return detail.model_copy(update={"settings": batch_service.load_batch_settings(batch)})
+    return detail.model_copy(
+        update={
+            "settings": batch_service.load_batch_settings(batch),
+            "columns": await batch_service.columns_for(session, batch),
+        }
+    )
 
 
 def _parse_passwords(raw: str | None, *, max_entries: int) -> dict[str, str]:
@@ -104,7 +116,7 @@ async def create_batch(
         entity_id=batch.id,
     )
     await session.commit()
-    return _to_detail(batch)
+    return await _to_detail(session, batch)
 
 
 @router.get(
@@ -121,6 +133,13 @@ async def list_batches(
         BatchStatus | None, Query(alias="filter[status]", description="Only this status.")
     ] = None,
     search: Annotated[str | None, Query(max_length=200)] = None,
+    certificate_type_id: Annotated[
+        uuid.UUID | None,
+        Query(
+            alias="filter[certificate_type_id]",
+            description="Only batches in this certificate category.",
+        ),
+    ] = None,
     include_total: Annotated[
         bool, Query(description="Also return a total count. Costs an extra query.")
     ] = False,
@@ -132,6 +151,7 @@ async def list_batches(
         cursor=Cursor.decode(cursor) if cursor else None,
         status=batch_status,
         search=search,
+        certificate_type_id=certificate_type_id,
         include_total=include_total,
     )
     return Page.build(
@@ -154,7 +174,7 @@ async def get_batch(
     scope: WorkspaceScopeDep,
 ) -> BatchDetail:
     batch = await batch_service.get_batch(session, scope=scope, batch_id=batch_id)
-    return _to_detail(batch)
+    return await _to_detail(session, batch)
 
 
 @router.get(
@@ -372,7 +392,7 @@ async def start_batch(
 
     for document_id in document_ids:
         enqueue(TASK_TEXT_DOCUMENT, {"document_id": str(document_id)})
-    return _to_detail(batch)
+    return await _to_detail(session, batch)
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +607,9 @@ async def abort_upload(
     summary="Permanently delete a batch, its documents and its stored files",
     responses={
         403: {"description": "Only administrators may delete a batch."},
-        409: {"description": "The batch is still processing."},
+        409: {
+            "description": ("The batch is still processing, or the register still cites its files.")
+        },
     },
 )
 async def delete_batch(
@@ -595,9 +617,34 @@ async def delete_batch(
     session: SessionDep,
     scope: WorkspaceScopeDep,
     audit: AuditContextDep,
+    force: Annotated[
+        bool,
+        Query(
+            description=(
+                "Delete even while the batch is still being read. For a batch that has "
+                "stopped making progress and would otherwise never be deletable."
+            )
+        ),
+    ] = False,
+    include_register: Annotated[
+        bool,
+        Query(
+            description=(
+                "Also delete the register entries this batch filed. Without it, a batch "
+                "whose certificates reached the register is refused, because those "
+                "entries cite its scans and must not lose them by accident."
+            )
+        ),
+    ] = False,
 ) -> None:
     """Hard delete. Blobs go first, then the rows - see ``delete_batch``."""
-    summary = await batch_service.delete_batch(session, scope=scope, batch_id=batch_id)
+    summary = await batch_service.delete_batch(
+        session,
+        scope=scope,
+        batch_id=batch_id,
+        force=force,
+        include_register=include_register,
+    )
     await record_audit(
         session,
         AuditAction.BATCH_DELETED,
@@ -607,6 +654,8 @@ async def delete_batch(
         metadata={
             "count": summary.documents_deleted,
             "skipped_count": summary.documents_deleted - summary.objects_deleted,
+            "forced": force,
+            "register_entries_deleted": include_register,
         },
     )
     await session.commit()

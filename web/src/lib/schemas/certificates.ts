@@ -75,11 +75,16 @@ export const documentLinkSchema = z.object({
 });
 export type DocumentLink = z.infer<typeof documentLinkSchema>;
 
-/** Where one value came from. Loosely typed: the pipeline adds keys over time. */
-export const provenanceSchema = z.record(
-  z.string(),
-  z.record(z.string(), z.union([z.string(), z.number(), z.null()])),
-);
+/**
+ * Where one value came from. Open at the leaf on purpose.
+ *
+ * The pipeline writes a bounding box under each field, so an entry is nested JSON and
+ * not a flat map of scalars. Requiring scalars here rejected the whole record - every
+ * entry read from a scan carries a box - and the screen showed a skeleton forever
+ * instead of the certificate. Readers pick the keys they understand and ignore the
+ * rest, which also means the pipeline can add a key without breaking this screen.
+ */
+export const provenanceSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
 
 export const certificateDetailSchema = certificateSummarySchema.extend({
   schema_version_id: z.string().uuid().nullish(),
@@ -115,6 +120,8 @@ export const matchKindSchema = z.enum([
   "number_prefix",
   "name",
   "similar_name",
+  "field_value",
+  "field_prefix",
   "filtered",
   "none",
 ]);
@@ -122,6 +129,14 @@ export type MatchKind = z.infer<typeof matchKindSchema>;
 
 export const searchHitSchema = z.object({
   certificate: certificateSummarySchema,
+  /**
+   * The entry's fields under its batch's own column names.
+   *
+   * The summary beside it carries only what the registry lifts by role, which a batch
+   * that defined its own columns does not have - and a results table is supposed to
+   * show that batch's columns.
+   */
+  values: z.record(z.string(), z.string()).default({}),
   match: matchKindSchema,
   same_name_count: z.number().int(),
 });
@@ -149,6 +164,8 @@ export const MATCH_KIND_CAPTION: Record<MatchKind, string> = {
   number_prefix: "No exact match. These certificate numbers start with what you typed.",
   name: "No certificate with that number. These entries carry that name.",
   similar_name: "No exact match. These names are spelled similarly - check carefully.",
+  field_value: "Matched that column exactly.",
+  field_prefix: "No exact match. These start with what you typed.",
   filtered: "Everything matching these filters, newest first.",
   none: "Nothing matched.",
 };

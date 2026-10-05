@@ -23,6 +23,7 @@ import {
   flagLabel,
   isApproved,
 } from "@/lib/schemas/rows";
+import { fieldLabel } from "@/lib/grid-columns";
 import { canSplitRow, splitPageOptions } from "@/lib/units";
 import { valueTextAttributes } from "@/lib/text-direction";
 import { cn, confidenceClass, describeConfidence, formatConfidence } from "@/lib/utils";
@@ -177,7 +178,9 @@ export function RowDetailPane({
           pageNumber={currentPage}
           onPageChange={setPage}
           bbox={field?.bbox ?? null}
-          fieldLabel={field ? (field.label ?? selectedFieldName) : null}
+          fieldLabel={
+            field ? fieldLabel(field.name, [row.certificate_type], field.label) : null
+          }
           fileName={row.file_name}
         />
 
@@ -217,8 +220,8 @@ export function RowDetailPane({
                         active && "bg-primary-surface text-primary-surface-foreground",
                       )}
                     >
-                      <span className="w-full text-sm font-semibold text-muted-foreground sm:w-44 sm:shrink-0">
-                        {value.label ?? value.name}
+                      <span className="w-full text-base font-semibold text-muted-foreground sm:w-44 sm:shrink-0">
+                        {fieldLabel(value.name, [row.certificate_type], value.label)}
                       </span>
                       <span
                         {...valueTextAttributes(value.value)}

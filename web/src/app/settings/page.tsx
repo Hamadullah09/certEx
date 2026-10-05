@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Info, Lock, Settings as SettingsIcon } from "lucide-react";
+import Link from "next/link";
+import { toast } from "sonner";
+import { Info, Lock, Settings as SettingsIcon, Users } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +16,11 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBatch, useBatchList } from "@/hooks/use-batches";
 import { useSession } from "@/hooks/use-session";
-import { useSaveWorkspaceSettings, useWorkspaceSettings } from "@/hooks/use-review";
+import {
+  useRenameWorkspace,
+  useSaveWorkspaceSettings,
+  useWorkspaceSettings,
+} from "@/hooks/use-review";
 import { ApiError } from "@/lib/api";
 import type { ReviewSettings } from "@/lib/schemas/review";
 import {
@@ -61,6 +67,15 @@ export default function SettingsPage() {
 
   const { data: settings, isPending } = useWorkspaceSettings();
   const save = useSaveWorkspaceSettings();
+  const rename = useRenameWorkspace();
+
+  const [officeName, setOfficeName] = React.useState("");
+  const nameSeeded = React.useRef(false);
+  React.useEffect(() => {
+    if (nameSeeded.current || !session) return;
+    nameSeeded.current = true;
+    setOfficeName(session.workspace.name);
+  }, [session]);
 
   const [autoApprove, setAutoApprove] = React.useState("");
   const [floor, setFloor] = React.useState("");
@@ -109,8 +124,18 @@ export default function SettingsPage() {
     <AppShell>
       <PageHeader
         icon={SettingsIcon}
+        actions={
+          canSave ? (
+            <Button asChild size="lg" variant="outline">
+              <Link href="/settings/users">
+                <Users aria-hidden="true" />
+                Users
+              </Link>
+            </Button>
+          ) : null
+        }
         title="Settings"
-        description="How this office reads certificates: when a reading is accepted on its own, and what goes to a person to check."
+        description="What this office is called, and how it reads certificates."
       />
 
       {!canSave ? (
@@ -124,8 +149,57 @@ export default function SettingsPage() {
         </Alert>
       ) : null}
 
+      {/* First, because it is the one setting a new deployment always needs to change:
+          the name it starts with is whatever the install script was given. */}
+      <Card className="mt-8">
+        <CardHeader className="pb-4">
+          <CardTitle>Name of this office</CardTitle>
+          <CardDescription>
+            Shown at the top of every screen and used in the name of every file you
+            download. A new installation starts out called &ldquo;Demo Records
+            Office&rdquo; until somebody changes it here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="max-w-md">
+            <Label htmlFor="workspace-name">Name</Label>
+            <Input
+              id="workspace-name"
+              className="mt-1.5"
+              placeholder="Union Council 42, Lahore"
+              value={officeName}
+              disabled={!canSave || rename.isPending}
+              onChange={(event) => setOfficeName(event.target.value)}
+            />
+          </div>
+          {canSave ? (
+            <Button
+              size="lg"
+              disabled={
+                rename.isPending ||
+                !officeName.trim() ||
+                officeName.trim() === session?.workspace.name
+              }
+              onClick={() =>
+                rename.mutate(officeName.trim(), {
+                  onSuccess: () => toast.success("The name was saved."),
+                  onError: (error) =>
+                    toast.error(
+                      error instanceof ApiError
+                        ? error.userMessage
+                        : "The name could not be saved.",
+                    ),
+                })
+              }
+            >
+              {rename.isPending ? "Saving…" : "Save the name"}
+            </Button>
+          ) : null}
+        </CardContent>
+      </Card>
+
       <form onSubmit={submit}>
-        <Card className="mt-8">
+        <Card className="mt-6">
           <CardHeader className="pb-5">
             <CardTitle>When a reading is accepted without a person</CardTitle>
             <CardDescription>

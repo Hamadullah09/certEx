@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
+import { DownloadBar } from "@/components/review/download-bar";
 import { KeyboardHelp } from "@/components/review/keyboard-help";
 import { type CellPosition, ResultsGrid } from "@/components/review/results-grid";
 import { RowDetailPane } from "@/components/review/row-detail-pane";
@@ -265,6 +266,29 @@ export default function BatchResultsPage() {
         </div>
       ) : null}
 
+      {/* Three sentences, always on, no dismiss button. A clerk who uses this screen
+          every day stops reading it after a week; one who uses it twice a year needs
+          it both times, and would have to find whatever they dismissed. */}
+      <Card className="mt-6 border-secondary-border/50 bg-secondary/30">
+        <CardContent className="p-5">
+          <h2 className="text-lg">What to do on this screen</h2>
+          <ol className="mt-2 grid gap-2 sm:grid-cols-3">
+            <li className="text-base">
+              <span className="font-bold">1. Look.</span> Pick a certificate in the table. What
+              was read from it, and the scan it came from, appear underneath.
+            </li>
+            <li className="text-base">
+              <span className="font-bold">2. Fix.</span> Click any value in the table to type
+              over it. What you type is kept, even if the certificate is read again.
+            </li>
+            <li className="text-base">
+              <span className="font-bold">3. Approve.</span> Mark each certificate as checked,
+              then download the whole batch at the bottom of this page.
+            </li>
+          </ol>
+        </CardContent>
+      </Card>
+
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div>
           <Label htmlFor="filter-status">Checked or not</Label>
@@ -477,6 +501,14 @@ export default function BatchResultsPage() {
           />
         </div>
       </div>
+
+      {/* The filters above are passed in deliberately: the file holds what the screen
+          shows. */}
+      <DownloadBar
+        batchId={batchId}
+        batchName={batch.data?.name ?? "certificates"}
+        filters={filters}
+      />
     </AppShell>
   );
 }

@@ -252,3 +252,53 @@ class TestTemplatesWithTheRulesEngine:
         extracted = extract_fields([page], certificate_type=CertificateType.BIRTH)
         assert extracted.template_used is False
         assert extracted.value("child_full_name") == "Ayesha Noor Malik"
+
+
+class TestATemplateCannotWidenTheBatchSchema:
+    """A template is recognised by the form, not by the batch that learned it.
+
+    Two batches can hold the same printed form and ask for different columns - that is
+    the whole point of per-batch schemas. The template knows where twenty fields sit;
+    a batch that asked for four must still get four, because the fifth has no column in
+    its CSV, no field in its register entry and nothing a reviewer could correct.
+    """
+
+    def test_a_field_outside_the_schema_is_dropped(self) -> None:
+        from certex.fields import FieldKind, FieldSchema, FieldSpec
+
+        page = page_of(
+            [
+                "CERTIFICATE OF BIRTH",
+                "Name of Child: Ayesha Noor Malik",
+                "Issuing Authority: Union Council 42, Lahore",
+            ]
+        )
+        narrow = FieldSchema(
+            version="test",
+            certificate_type=CertificateType.BIRTH,
+            fields=(
+                FieldSpec(
+                    name="child_full_name",
+                    label="Name of Child",
+                    kind=FieldKind.NAME,
+                ),
+            ),
+        )
+        rules = TemplateRules(
+            rules=[
+                TemplateRule(field="child_full_name", anchor="Name of Child"),
+                TemplateRule(field="issuing_authority", anchor="Issuing Authority"),
+            ]
+        )
+
+        extracted = extract_fields(
+            [page],
+            certificate_type=CertificateType.BIRTH,
+            template_rules=rules,
+            schema=narrow,
+        )
+
+        assert "child_full_name" in extracted.fields
+        assert "issuing_authority" not in extracted.fields, (
+            "a template wrote a column this batch never asked for"
+        )

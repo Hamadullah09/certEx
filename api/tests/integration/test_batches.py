@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from certex.db.models import AuditLog, Batch, Document, User, Workspace
-from certex.enums import AuditAction, BatchStatus, UserRole
+from certex.enums import AuditAction, BatchStatus, DocumentStatus, UserRole
 from tests.conftest import TEST_PASSWORD, authenticate
 from tests.fixtures.builders import build_text_pdf
 
@@ -398,3 +398,315 @@ class TestRoleMatrix:
 
         deleted = await api_client.delete(f"{BATCHES}/{created.json()['id']}")
         assert (deleted.status_code == 204) is can_delete
+
+
+class TestDeletingABatchThatIsStillReading:
+    """A batch stuck mid-read is the one an office most wants rid of.
+
+    Refusing outright is right by default - deleting a batch a minute from finishing
+    throws away real work - but a batch whose worker died stays PROCESSING for ever,
+    and an outright refusal made that batch undeletable by anybody.
+    """
+
+    async def test_it_is_refused_by_default(
+        self, api_client: AsyncClient, db_session, admin_user: User
+    ) -> None:
+        await authenticate(api_client, admin_user)
+        batch_id = (
+            await api_client.post(BATCHES, json={"name": "Reading", "settings": {}})
+        ).json()["id"]
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.PROCESSING
+        await db_session.flush()
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}")
+        assert response.status_code == 409
+        assert "still being read" in response.text
+
+    async def test_it_can_be_forced(
+        self, api_client: AsyncClient, db_session, admin_user: User
+    ) -> None:
+        await authenticate(api_client, admin_user)
+        batch_id = (await api_client.post(BATCHES, json={"name": "Stuck", "settings": {}})).json()[
+            "id"
+        ]
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.PROCESSING
+        await db_session.flush()
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}?force=true")
+        assert response.status_code == 204, response.text
+        assert await db_session.get(Batch, uuid.UUID(batch_id)) is None
+
+    async def test_a_batch_waiting_to_start_needs_no_force(
+        self, api_client: AsyncClient, db_session, admin_user: User
+    ) -> None:
+        """What the operator hit: a draft batch is not processing, and refusing to
+        delete one was the screen being wrong rather than the server."""
+        await authenticate(api_client, admin_user)
+        batch_id = (await api_client.post(BATCHES, json={"name": "Draft", "settings": {}})).json()[
+            "id"
+        ]
+
+        assert (await api_client.delete(f"{BATCHES}/{batch_id}")).status_code == 204
+
+
+class TestRemovingAFileAfterReading:
+    async def test_a_duplicate_can_be_taken_out_of_a_finished_batch(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        operator_user: User,
+        object_storage,
+        fixture_dir: Path,
+    ) -> None:
+        """A stale "Duplicate" in the file list is something a clerk should be able to
+        tidy away; it contributes nothing to the batch's dataset."""
+        await authenticate(api_client, operator_user)
+        batch_id = (await api_client.post(BATCHES, json={"name": "Tidy", "settings": {}})).json()[
+            "id"
+        ]
+        pdf = build_text_pdf(fixture_dir / "a.pdf")
+        upload = await api_client.post(
+            f"{BATCHES}/{batch_id}/files",
+            files=[("files", ("a.pdf", pdf.read_bytes(), "application/pdf"))],
+        )
+        document_id = upload.json()[0]["document_id"]
+
+        document = await db_session.get(Document, uuid.UUID(document_id))
+        document.status = DocumentStatus.DUPLICATE
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.COMPLETED
+        await db_session.flush()
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}/documents/{document_id}")
+        assert response.status_code == 204, response.text
+        assert await db_session.get(Document, uuid.UUID(document_id)) is None
+
+    async def test_a_failed_file_can_be_taken_out_too(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        operator_user: User,
+        object_storage,
+        fixture_dir: Path,
+    ) -> None:
+        await authenticate(api_client, operator_user)
+        batch_id = (await api_client.post(BATCHES, json={"name": "Tidy", "settings": {}})).json()[
+            "id"
+        ]
+        pdf = build_text_pdf(fixture_dir / "a.pdf")
+        upload = await api_client.post(
+            f"{BATCHES}/{batch_id}/files",
+            files=[("files", ("a.pdf", pdf.read_bytes(), "application/pdf"))],
+        )
+        document_id = upload.json()[0]["document_id"]
+
+        document = await db_session.get(Document, uuid.UUID(document_id))
+        document.status = DocumentStatus.FAILED
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.COMPLETED
+        await db_session.flush()
+
+        assert (
+            await api_client.delete(f"{BATCHES}/{batch_id}/documents/{document_id}")
+        ).status_code == 204
+
+    async def test_a_file_that_was_read_still_cannot_be_removed(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        operator_user: User,
+        object_storage,
+        fixture_dir: Path,
+    ) -> None:
+        """Its values are in the register. Removing the scan behind them would leave
+        entries nobody can trace back to a document."""
+        await authenticate(api_client, operator_user)
+        batch_id = (await api_client.post(BATCHES, json={"name": "Read", "settings": {}})).json()[
+            "id"
+        ]
+        pdf = build_text_pdf(fixture_dir / "a.pdf")
+        upload = await api_client.post(
+            f"{BATCHES}/{batch_id}/files",
+            files=[("files", ("a.pdf", pdf.read_bytes(), "application/pdf"))],
+        )
+        document_id = upload.json()[0]["document_id"]
+
+        document = await db_session.get(Document, uuid.UUID(document_id))
+        document.status = DocumentStatus.COMPLETED
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.COMPLETED
+        await db_session.flush()
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}/documents/{document_id}")
+        assert response.status_code == 409
+        assert "already been read" in response.text
+
+    async def test_the_batch_counters_follow(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        operator_user: User,
+        object_storage,
+        fixture_dir: Path,
+    ) -> None:
+        await authenticate(api_client, operator_user)
+        batch_id = (
+            await api_client.post(BATCHES, json={"name": "Counted", "settings": {}})
+        ).json()["id"]
+        pdf = build_text_pdf(fixture_dir / "a.pdf")
+        upload = await api_client.post(
+            f"{BATCHES}/{batch_id}/files",
+            files=[("files", ("a.pdf", pdf.read_bytes(), "application/pdf"))],
+        )
+        document_id = upload.json()[0]["document_id"]
+
+        document = await db_session.get(Document, uuid.UUID(document_id))
+        document.status = DocumentStatus.DUPLICATE
+        batch = await db_session.get(Batch, uuid.UUID(batch_id))
+        batch.status = BatchStatus.COMPLETED
+        await db_session.flush()
+
+        await api_client.delete(f"{BATCHES}/{batch_id}/documents/{document_id}")
+
+        detail = (await api_client.get(f"{BATCHES}/{batch_id}")).json()
+        assert detail["file_count"] == 0
+        assert detail["duplicate_count"] == 0
+
+
+class TestDeletingABatchTheRegisterPointsAt:
+    """Once a batch's certificates reach the register, its scans are cited.
+
+    The link carries ``RESTRICT`` on purpose - a document an entry cites must not vanish
+    as a side effect of tidying a batch - but nothing checked for it before the delete
+    reached the database, so the caller got a foreign key violation as a 500 and the
+    batch simply would not go.
+    """
+
+    async def _batch_with_a_register_entry(
+        self, api_client: AsyncClient, db_session, workspace: Workspace, fixture_dir: Path
+    ) -> tuple[uuid.UUID, uuid.UUID]:
+        """A batch holding one document that one register entry cites."""
+        from certex.db.models import Certificate, CertificateDocument, CertificateTypeRecord
+        from certex.enums import CertificateSource
+        from certex.services import schema_service
+
+        batch_id = uuid.UUID(
+            (await api_client.post(BATCHES, json={"name": "Filed", "settings": {}})).json()["id"]
+        )
+        pdf = build_text_pdf(fixture_dir / "a.pdf")
+        upload = await api_client.post(
+            f"{BATCHES}/{batch_id}/files",
+            files=[("files", ("a.pdf", pdf.read_bytes(), "application/pdf"))],
+        )
+        document_id = uuid.UUID(upload.json()[0]["document_id"])
+
+        await schema_service.ensure_builtin_types(db_session, workspace_id=workspace.id)
+        certificate_type = await db_session.scalar(
+            select(CertificateTypeRecord).where(
+                CertificateTypeRecord.workspace_id == workspace.id,
+                CertificateTypeRecord.key == "BIRTH",
+            )
+        )
+        assert certificate_type is not None
+
+        certificate = Certificate(
+            workspace_id=workspace.id,
+            certificate_type_id=certificate_type.id,
+            certificate_number="BC-2019-004471",
+            certificate_number_key="bc2019004471",
+            values_jsonb={"certificate_number": "BC-2019-004471"},
+            source=CertificateSource.EXTRACTION,
+            source_batch_id=batch_id,
+        )
+        db_session.add(certificate)
+        await db_session.flush()
+        db_session.add(
+            CertificateDocument(
+                certificate_id=certificate.id,
+                document_id=document_id,
+                workspace_id=workspace.id,
+            )
+        )
+        await db_session.flush()
+        return batch_id, certificate.id
+
+    async def test_it_is_refused_with_a_message_rather_than_a_500(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        admin_user: User,
+        object_storage,
+        workspace: Workspace,
+        fixture_dir: Path,
+    ) -> None:
+        await authenticate(api_client, admin_user)
+        batch_id, _ = await self._batch_with_a_register_entry(
+            api_client, db_session, workspace, fixture_dir
+        )
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}")
+        assert response.status_code == 409, response.text
+        assert "register" in response.text.lower()
+        assert await db_session.get(Batch, batch_id) is not None
+
+    async def test_the_register_entries_can_be_deleted_with_it(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        admin_user: User,
+        object_storage,
+        workspace: Workspace,
+        fixture_dir: Path,
+    ) -> None:
+        """What an office needs when the whole batch was a mistake."""
+        from certex.db.models import Certificate
+
+        await authenticate(api_client, admin_user)
+        batch_id, certificate_id = await self._batch_with_a_register_entry(
+            api_client, db_session, workspace, fixture_dir
+        )
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}?include_register=true")
+        assert response.status_code == 204, response.text
+        assert await db_session.get(Batch, batch_id) is None
+        assert await db_session.get(Certificate, certificate_id) is None
+
+    async def test_an_entry_from_another_batch_keeps_its_values(
+        self,
+        api_client: AsyncClient,
+        db_session,
+        admin_user: User,
+        object_storage,
+        workspace: Workspace,
+        fixture_dir: Path,
+    ) -> None:
+        """It loses only the link to this batch's scan.
+
+        Deleting somebody else's register entry because it happened to cite a scan here
+        would be a far larger action than the one that was asked for.
+        """
+        from certex.db.models import Certificate, CertificateDocument
+
+        await authenticate(api_client, admin_user)
+        batch_id, certificate_id = await self._batch_with_a_register_entry(
+            api_client, db_session, workspace, fixture_dir
+        )
+        # Re-home the entry: it now belongs to some other batch and merely cites this one.
+        entry = await db_session.get(Certificate, certificate_id)
+        assert entry is not None
+        entry.source_batch_id = None
+        await db_session.flush()
+
+        response = await api_client.delete(f"{BATCHES}/{batch_id}?include_register=true")
+        assert response.status_code == 204, response.text
+
+        survivor = await db_session.get(Certificate, certificate_id)
+        assert survivor is not None, "an entry from elsewhere must not be deleted"
+        links = await db_session.scalar(
+            select(func.count())
+            .select_from(CertificateDocument)
+            .where(CertificateDocument.certificate_id == certificate_id)
+        )
+        assert links == 0, "the link to the deleted scan should be gone"

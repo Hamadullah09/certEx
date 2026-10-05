@@ -119,14 +119,19 @@ def build_column_plan(
     *,
     schemas: Iterable[FieldSchema] = (),
     extra_field_names: Iterable[str] = (),
+    include_extras: bool = True,
     include_confidence: bool = False,
     include_snippet: bool = False,
 ) -> ColumnPlan:
     """The columns for the schemas and certificate types present in the export.
 
-    ``schemas`` takes precedence: when an export covers batches that pinned schema
-    versions, those exact fields become the columns. ``certificate_types`` is the
-    fallback for rows read before schemas existed.
+    ``schemas`` does not merely come first - it is the whole answer. A batch that
+    defined its own columns asked for those columns and no others, so the built-in
+    fields for the certificate type are not added underneath them. They used to be,
+    which turned a four-column register into a forty-column spreadsheet with the four
+    the office wanted buried in the middle of it.
+
+    ``certificate_types`` is the fallback, for rows read before schemas existed.
     """
     present = list(dict.fromkeys(certificate_types))
     explicit = list(schemas)
@@ -151,29 +156,31 @@ def build_column_plan(
         for spec in common_fields():
             ordered_specs.append(spec)
             seen.add(spec.name)
-    # Types in a fixed order, so two exports of the same batch have the same columns
-    # whatever order the rows happened to arrive in.
-    for certificate_type in sorted(present, key=lambda item: item.value):
-        for spec in fields_for(certificate_type):
-            if spec.name in seen:
-                continue
-            ordered_specs.append(spec)
-            seen.add(spec.name)
+
+        # Types in a fixed order, so two exports of the same batch have the same
+        # columns whatever order the rows happened to arrive in.
+        for certificate_type in sorted(present, key=lambda item: item.value):
+            for spec in fields_for(certificate_type):
+                if spec.name in seen:
+                    continue
+                ordered_specs.append(spec)
+                seen.add(spec.name)
 
     columns.extend(
         _field_columns(
             ordered_specs, include_confidence=include_confidence, include_snippet=include_snippet
         )
     )
-    columns.extend(
-        Column(
-            key=f"{EXTRA_PREFIX}{name}",
-            header=f"{name.replace('_', ' ').capitalize()} (extra)",
-            field=name,
-            kind="extra",
+    if include_extras:
+        columns.extend(
+            Column(
+                key=f"{EXTRA_PREFIX}{name}",
+                header=f"{name.replace('_', ' ').capitalize()} (extra)",
+                field=name,
+                kind="extra",
+            )
+            for name in sorted(set(extra_field_names))
         )
-        for name in sorted(set(extra_field_names))
-    )
     columns.extend(
         Column(key=key, header=header, kind="context") for key, header in _CONTEXT_COLUMNS
     )

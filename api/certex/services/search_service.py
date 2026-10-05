@@ -73,6 +73,12 @@ class MatchKind(str, Enum):
     NUMBER_PREFIX = "number_prefix"
     NAME = "name"
     SIMILAR_NAME = "similar_name"
+    FIELD_VALUE = "field_value"
+    """One configured field, matched exactly."""
+
+    FIELD_PREFIX = "field_prefix"
+    """One configured field, matched on what it starts with."""
+
     FILTERED = "filtered"
     """No search text: the filters alone, newest event first."""
 
@@ -85,6 +91,13 @@ class SearchQuery:
 
     text: str | None = None
     certificate_type_id: uuid.UUID | None = None
+    batch_id: uuid.UUID | None = None
+    """Only entries read from this batch, for a search run from inside one."""
+
+    field: str | None = None
+    """A configured field to search by name, rather than by number or by who is named."""
+
+    field_value: str | None = None
     name: str | None = None
     father_name: str | None = None
     event_date_from: dt.date | None = None
@@ -135,6 +148,8 @@ def _base(query: SearchQuery, *, workspace_id: uuid.UUID) -> Select[tuple[Certif
         statement = statement.where(Certificate.status != CertificateStatus.VOID)
     if query.certificate_type_id is not None:
         statement = statement.where(Certificate.certificate_type_id == query.certificate_type_id)
+    if query.batch_id is not None:
+        statement = statement.where(Certificate.source_batch_id == query.batch_id)
     if query.needs_review is not None:
         statement = statement.where(Certificate.needs_review.is_(query.needs_review))
     if query.duplicates_only:
@@ -202,6 +217,22 @@ async def search(
         )
 
     base = _base(query, workspace_id=workspace_id)
+
+    # A field search is its own question and never falls through to the others: asked
+    # for a village called "Chak 42", answering with a certificate numbered 42 would
+    # be worse than answering with nothing.
+    if query.field and query.field_value and query.field_value.strip():
+        value = query.field_value.strip()
+        tiers = _field_tiers(base, query.field, value)
+        if query.batch_id is not None or query.certificate_type_id is not None:
+            tiers.append(_field_prefix_tier(base, query.field, value))
+        for kind, statement in tiers:
+            rows, total = await _page(session, statement, query=query)
+            if rows:
+                return await _results(session, rows, kind, total=total, query=query)
+        return SearchResults(
+            hits=(), kind=MatchKind.NONE, total=0, limit=query.limit, offset=query.offset
+        )
 
     if not query.has_text:
         statement = base.order_by(
@@ -277,6 +308,46 @@ def _tiers(
             )
         )
     return tiers
+
+
+def _field_tiers(
+    base: Select[tuple[Certificate]], field: str, value: str
+) -> list[tuple[MatchKind, Select[tuple[Certificate]]]]:
+    """Searching one configured field by name.
+
+    This is how an office searches a column it invented - "Blood group", "Village" -
+    which the number and name tiers know nothing about.
+
+    Exact first, through JSONB containment, because that is the one form the GIN index
+    on ``values_jsonb`` can answer: at a million entries it is an index scan, and
+    anything else here is a sequential one.
+
+    The prefix tier below it cannot use that index, so it is offered **only** inside a
+    batch or a certificate type. That is not a UI convenience - it is the difference
+    between scanning one register and scanning every record the office has ever held.
+    """
+    tiers: list[tuple[MatchKind, Select[tuple[Certificate]]]] = []
+    ordering = (Certificate.event_date.desc().nullslast(), Certificate.id)
+
+    tiers.append(
+        (
+            MatchKind.FIELD_VALUE,
+            base.where(Certificate.values_jsonb.contains({field: value})).order_by(*ordering),
+        )
+    )
+    return tiers
+
+
+def _field_prefix_tier(
+    base: Select[tuple[Certificate]], field: str, value: str
+) -> tuple[MatchKind, Select[tuple[Certificate]]]:
+    pattern = f"{_escape_like(value)}%"
+    return (
+        MatchKind.FIELD_PREFIX,
+        base.where(Certificate.values_jsonb[field].astext.ilike(pattern, escape="\\")).order_by(
+            Certificate.event_date.desc().nullslast(), Certificate.id
+        ),
+    )
 
 
 def _escape_like(value: str) -> str:

@@ -42,6 +42,8 @@ function summary(overrides: Partial<CertificateSummary> = {}): CertificateSummar
 function hit(overrides: Partial<SearchHit> = {}): SearchHit {
   return {
     certificate: summary(),
+    // Carried on every hit so a results table can show its batch's own columns.
+    values: {},
     match: "certificate_number",
     same_name_count: 1,
     ...overrides,

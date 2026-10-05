@@ -9,10 +9,14 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from certex.core.errors import remediation_for
-from certex.enums import BatchStatus, CertificateType, DocumentStatus
+from certex.enums import BatchStatus, CertificateType, DocumentStatus, FieldRole
+from certex.fields import FieldKind
 from certex.pipeline.safety import sanitise_filename
+from certex.schemas.registry import FieldDefinition
+from certex.services.schema_service import MAX_FIELDS_PER_SCHEMA
 
 __all__ = [
+    "BatchColumn",
     "BatchCreateRequest",
     "BatchDetail",
     "BatchSettings",
@@ -25,6 +29,29 @@ __all__ = [
 ]
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0)]
+
+MAX_BATCH_FIELDS = MAX_FIELDS_PER_SCHEMA
+"""The same ceiling the schema builder enforces: a batch's columns *are* a schema."""
+
+
+class BatchColumn(BaseModel):
+    """One column of a batch, as every screen that shows the batch reads it.
+
+    A flattened view of the batch's pinned schema fields. The screens need the name,
+    the label and enough about the field to render and search it; they do not need the
+    schema's versioning, and a batch that reused a workspace schema and one that
+    defined its own look identical here, which is what lets one screen render both.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(description="Machine key: the CSV header and the JSON key.")
+    label: str = Field(description="What a person calls this column.")
+    kind: FieldKind
+    role: FieldRole = FieldRole.NONE
+    required: bool = False
+    searchable: bool = False
+    position: int = Field(ge=0, description="Column order, from zero.")
 
 
 class BatchSettings(BaseModel):
@@ -74,10 +101,43 @@ class BatchSettings(BaseModel):
 
 
 class BatchCreateRequest(BaseModel):
+    """A new batch, and the columns every document uploaded into it will be read for.
+
+    The columns are the point of the request. Everything a batch extracts for the rest
+    of its life is decided here and pinned, so that the ten-thousandth upload is read
+    exactly like the first without anybody configuring anything again.
+
+    Three ways to say what the columns are, in order of precedence:
+
+    * ``fields`` - this batch's own columns, defined by whoever created it.
+    * ``schema_version_id`` - an existing published schema, reused as-is.
+    * neither - the certificate type's default schema, which is what an office that
+      has not customised anything wants.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
     settings: BatchSettings = Field(default_factory=BatchSettings)
+
+    certificate_type_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The category this batch belongs to. Required when columns are defined, "
+            "because a schema belongs to a certificate type."
+        ),
+    )
+    schema_version_id: uuid.UUID | None = Field(
+        default=None, description="Reuse an existing published schema instead of defining columns."
+    )
+    fields: list[FieldDefinition] | None = Field(
+        default=None,
+        max_length=MAX_BATCH_FIELDS,
+        description="Columns for this batch, in the order they should appear.",
+    )
+    description: str | None = Field(default=None, max_length=1000)
+    year: int | None = Field(default=None, ge=1800, le=2200)
+    registration_office: str | None = Field(default=None, max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -86,6 +146,17 @@ class BatchCreateRequest(BaseModel):
         if not cleaned:
             raise ValueError("Give the batch a name.")
         return cleaned
+
+    @model_validator(mode="after")
+    def _columns_are_coherent(self) -> BatchCreateRequest:
+        if self.fields is not None and self.schema_version_id is not None:
+            raise ValueError("Define columns or reuse an existing schema, not both.")
+        if self.fields is not None:
+            if not self.fields:
+                raise ValueError("A batch needs at least one column.")
+            if self.certificate_type_id is None:
+                raise ValueError("Choose a certificate category before defining columns.")
+        return self
 
 
 class BatchSummary(BaseModel):
@@ -155,6 +226,20 @@ class BatchDetail(BatchSummary):
 
     settings: BatchSettings = Field(default_factory=BatchSettings)
     error_message: str | None = None
+    certificate_type_id: uuid.UUID | None = Field(
+        default=None,
+        description="The category this batch belongs to. Absent on batches made before categories.",
+    )
+    description: str | None = None
+    year: int | None = None
+    registration_office: str | None = None
+    columns: list[BatchColumn] = Field(
+        default_factory=list,
+        description=(
+            "The fields every document in this batch is read for, in column order. "
+            "Fixed when the batch was created."
+        ),
+    )
 
 
 class UploadedFile(BaseModel):

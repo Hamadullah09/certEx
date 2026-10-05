@@ -15,7 +15,12 @@ from certex.core.audit import record_audit
 from certex.core.deps import AuditContextDep, SessionDep, WorkspaceScopeDep
 from certex.enums import AuditAction
 from certex.logging_setup import get_logger
-from certex.schemas.workspace import WorkspaceSettings, WorkspaceSettingsUpdate
+from certex.schemas.workspace import (
+    WorkspaceProfile,
+    WorkspaceRename,
+    WorkspaceSettings,
+    WorkspaceSettingsUpdate,
+)
 from certex.services import workspace_service
 
 __all__ = ["router"]
@@ -63,3 +68,33 @@ async def put_settings(
     )
     await session.commit()
     return settings
+
+
+@router.put(
+    "/name",
+    response_model=WorkspaceProfile,
+    summary="Rename this office",
+    responses={403: {"description": "Only an administrator may rename the office."}},
+)
+async def rename(
+    payload: WorkspaceRename,
+    session: SessionDep,
+    scope: WorkspaceScopeDep,
+    audit: AuditContextDep,
+) -> WorkspaceProfile:
+    """The name shows on every screen and in every exported filename.
+
+    A deployment starts with whatever name the seeding script was given, which unless
+    somebody set it is "Demo Records Office" - so this is how a real office stops
+    introducing itself as a demo.
+    """
+    workspace = await workspace_service.rename_workspace(session, scope=scope, name=payload.name)
+    await record_audit(
+        session,
+        AuditAction.SETTINGS_UPDATED,
+        audit,
+        entity_type="workspace",
+        entity_id=scope.workspace_id,
+    )
+    await session.commit()
+    return WorkspaceProfile.model_validate(workspace)

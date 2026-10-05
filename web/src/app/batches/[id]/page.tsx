@@ -5,17 +5,23 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
+  ChevronLeft,
   FileText,
   Play,
   Radio,
   RefreshCw,
   RotateCcw,
+  Search,
   Table2,
+  Trash2,
   Timer,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
+import { columnLetter } from "@/components/batches/column-builder";
+import { DeleteBatch } from "@/components/batches/delete-batch";
+import { UploadPanel } from "@/components/batches/upload-panel";
 import {
   BatchStatusBadge,
   DocumentStatusBadge,
@@ -29,14 +35,20 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useBatch, useBatchDocuments, useStartBatch } from "@/hooks/use-batches";
+import {
+  useBatch,
+  useBatchDocuments,
+  useRemoveDocument,
+  useStartBatch,
+} from "@/hooks/use-batches";
 import { useBatchProgress } from "@/hooks/use-batch-progress";
 import { useBatchRows, useReprocessRows } from "@/hooks/use-rows";
+import { useCertificateTypes } from "@/hooks/use-register";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api";
 import { flattenRowPages } from "@/lib/rows-optimistic";
 import { roleSatisfies } from "@/lib/schemas/auth";
-import type { DocumentSummary } from "@/lib/schemas/batches";
+import type { BatchStatus, DocumentSummary } from "@/lib/schemas/batches";
 import { snapshotFromBatch } from "@/lib/schemas/progress";
 import { cn, formatBytes } from "@/lib/utils";
 
@@ -61,7 +73,37 @@ function CountTile({ label, value, tone }: { label: string; value: number; tone?
   );
 }
 
-function FileRow({ document }: { document: DocumentSummary }) {
+/**
+ * Whether this file can still be taken out of the batch.
+ *
+ * Before the batch is read, anything can go - that is how a rejected upload is
+ * discarded and sent again. Afterwards only a duplicate or a failure can, because
+ * those are the two states where the batch is carrying a file it got nothing from.
+ * A file that *was* read stays: its values are in the register, and removing the
+ * scan behind them would leave entries nobody can trace back to a document.
+ *
+ * The server enforces exactly this; the button is hidden rather than left to fail.
+ */
+function canRemove(document: DocumentSummary, batchStatus: BatchStatus | undefined): boolean {
+  if (batchStatus === "CREATED" || batchStatus === "UPLOADING") return true;
+  return document.status === "DUPLICATE" || document.status === "FAILED";
+}
+
+function FileRow({
+  document,
+  batchId,
+  batchStatus,
+  canEdit,
+}: {
+  document: DocumentSummary;
+  batchId: string;
+  batchStatus: BatchStatus | undefined;
+  canEdit: boolean;
+}) {
+  const [confirming, setConfirming] = React.useState(false);
+  const remove = useRemoveDocument(batchId);
+  const removable = canEdit && canRemove(document, batchStatus);
+
   return (
     <li className="flex flex-wrap items-start gap-x-4 gap-y-2 px-6 py-4">
       <FileText aria-hidden="true" className="mt-1 size-5 shrink-0 text-muted-foreground" />
@@ -88,6 +130,49 @@ function FileRow({ document }: { document: DocumentSummary }) {
       <div className="flex shrink-0 items-center gap-2">
         {document.is_encrypted ? <Badge variant="outline">Password</Badge> : null}
         <DocumentStatusBadge status={document.status} />
+        {removable ? (
+          confirming ? (
+            <>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={remove.isPending}
+                onClick={() =>
+                  remove.mutate(document.id, {
+                    onSuccess: () => toast.success(`${document.original_filename} was removed.`),
+                    onError: (error) => {
+                      setConfirming(false);
+                      toast.error(
+                        error instanceof ApiError
+                          ? error.userMessage
+                          : "The file could not be removed.",
+                      );
+                    },
+                  })
+                }
+              >
+                {remove.isPending ? "Removing…" : "Yes, remove"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={remove.isPending}
+                onClick={() => setConfirming(false)}
+              >
+                Keep
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={`Remove ${document.original_filename} from this batch`}
+              onClick={() => setConfirming(true)}
+            >
+              <Trash2 aria-hidden="true" />
+            </Button>
+          )
+        ) : null}
       </div>
     </li>
   );
@@ -98,6 +183,7 @@ export default function BatchProcessingPage() {
   const batchId = params.id;
 
   const session = useSession();
+  const categories = useCertificateTypes();
   const canEdit = Boolean(session.data && roleSatisfies(session.data.user.role, "OPERATOR"));
 
   const progress = useBatchProgress(batchId);
@@ -112,6 +198,12 @@ export default function BatchProcessingPage() {
   const batch = useBatch(batchId, {
     poll: progress.transport === "polling" && !streamFinished,
   });
+  // Declared after the batch it reads, which is not a style point: a `.find` over the
+  // categories runs on every render, and placed above it threw before the batch query
+  // existed.
+  const category = (categories.data ?? []).find(
+    (item) => item.id === batch.data?.certificate_type_id,
+  );
   const live = progress.snapshot ?? (batch.data ? snapshotFromBatch(batch.data) : null);
   const working = live ? !live.finished : Boolean(batch.data && !isTerminalBatchStatus(batch.data.status));
 
@@ -173,18 +265,43 @@ export default function BatchProcessingPage() {
 
   return (
     <AppShell>
+      {/* Which register this belongs to, and the way back to it. A batch is reached
+          through its category, so the way out should go there too. */}
+      {category ? (
+        <Button variant="ghost" asChild className="-ml-3">
+          <Link href={`/categories/${category.id}`}>
+            <ChevronLeft aria-hidden="true" />
+            {category.name}
+          </Link>
+        </Button>
+      ) : null}
+
       <PageHeader
         icon={Timer}
         title={batch.data?.name ?? "Batch"}
-        description="Watch the files being read, and open the results when the certificates are ready."
+        description={
+          category
+            ? `A batch of ${category.name.toLowerCase()} certificates. Watch the files being read, and open the results when they are ready.`
+            : "Watch the files being read, and open the results when the certificates are ready."
+        }
         actions={
           hasRows ? (
-            <Button asChild size="lg">
-              <Link href={`/batches/${batchId}/results`}>
-                <Table2 aria-hidden="true" />
-                Check the results
-              </Link>
-            </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button asChild size="lg">
+                <Link href={`/batches/${batchId}/results`}>
+                  <Table2 aria-hidden="true" />
+                  Check the results
+                </Link>
+              </Button>
+              {/* Separate from the results grid on purpose: checking is going through
+                  everything, and this is finding one certificate out of a million. */}
+              <Button asChild size="lg" variant="outline">
+                <Link href={`/batches/${batchId}/search`}>
+                  <Search aria-hidden="true" />
+                  Find a certificate
+                </Link>
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -356,12 +473,89 @@ export default function BatchProcessingPage() {
           ) : (
             <ul className="divide-y divide-border-subtle">
               {files.map((file) => (
-                <FileRow key={file.id} document={file} />
+                <FileRow
+                  key={file.id}
+                  document={file}
+                  batchId={batchId}
+                  batchStatus={batch.data?.status}
+                  canEdit={canEdit}
+                />
               ))}
             </ul>
           )}
         </CardContent>
       </Card>
+
+      {batch.data ? (
+        <UploadPanel
+          batchId={batchId}
+          columnCount={batch.data.columns.length}
+          onFinished={() => {
+            void batch.refetch();
+            void documents.refetch();
+          }}
+        />
+      ) : null}
+
+      {batch.data ? (
+        <Card className="mt-8">
+          <CardHeader className="pb-4">
+            <CardTitle>What is pulled out of every document</CardTitle>
+            <CardDescription>
+              Fixed when this batch was created. Every document uploaded here is read for
+              these {batch.data.columns.length}{" "}
+              {batch.data.columns.length === 1 ? "column" : "columns"}, and they are the
+              columns of the spreadsheet you download.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {batch.data.columns.length === 0 ? (
+              <p className="text-base text-muted-foreground">
+                This batch has no columns recorded, which should not happen. Report it.
+              </p>
+            ) : (
+              <ol className="flex flex-wrap gap-2">
+                {batch.data.columns.map((column, index) => (
+                  <li
+                    key={column.name}
+                    className="flex items-baseline gap-2 rounded-lg border-2 border-border bg-muted/50 px-3 py-2"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="text-sm font-bold tabular-nums text-muted-foreground"
+                    >
+                      {columnLetter(index)}
+                    </span>
+                    <span className="text-base font-semibold">{column.label}</span>
+                    <span className="font-mono text-sm text-muted-foreground">
+                      {column.name}
+                    </span>
+                    {column.role === "identifier" ? (
+                      <Badge variant="outline" className="ml-1">
+                        certificate number
+                      </Badge>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {batch.data ? (
+        <DeleteBatch
+          batchId={batchId}
+          batchName={batch.data.name}
+          fileCount={files.length}
+          certificateCount={live?.unit_count ?? 0}
+          role={session.data?.user.role}
+          // The batch's real status, not "has work left". A batch waiting for its
+          // files has work left and is perfectly deletable; passing `working` here is
+          // what disabled the button on a draft.
+          isProcessing={batch.data.status === "PROCESSING"}
+        />
+      ) : null}
     </AppShell>
   );
 }
